@@ -14,18 +14,10 @@
 
 using System;
 using System.Collections.Generic;
-using System.Net;
-using System.Text;
-using System.IO;
-
-using Newtonsoft.Json;
 
 using Project_Apollo.Entities;
 using Project_Apollo.Registry;
-using System.Data.Common;
-using Microsoft.VisualBasic.CompilerServices;
-using NUnit.Framework.Constraints;
-using System.Text.RegularExpressions;
+using Project_Apollo.Configuration;
 
 namespace Project_Apollo.Hooks
 {
@@ -112,6 +104,11 @@ namespace Project_Apollo.Hooks
                 pReq.Queries.TryGetValue("filter", out _filter);
                 pReq.Queries.TryGetValue("status", out _status);
                 pReq.Queries.TryGetValue("search", out _search);
+                if (Context.Params.P<bool>(AppParams.P_DEBUG_QUERIES))
+                {
+                    Context.Log.Debug("{0} AccountFilterInfo: filter={1}, status={2}, search={3}",
+                                _logHeader, _filter, _status, _search);
+                }
             }
             catch (Exception e)
             {
@@ -128,71 +125,69 @@ namespace Project_Apollo.Hooks
         /// <returns></returns>
         public IEnumerable<AccountEntity> Filter(AccountEntity pRequestingAcct = null)
         {
-            // Don't do any filtering yet
             foreach (AccountEntity acct in Accounts.Instance.AllAccountEntities()) {
-                bool matched = false;
+                bool filtering = !String.IsNullOrEmpty(_filter);
+                bool matchedFilter = false;
+                bool statusing = !String.IsNullOrEmpty(_status);
+                bool matchedStatus = false;
+                bool searching = !String.IsNullOrEmpty(_search);
+                bool matchedSearch = false;
 
-                if (!matched && !String.IsNullOrEmpty(_filter))
+                if (filtering)
                 {
                     string[] pieces = _filter.Split(",");
                     foreach (var filterCheck in pieces)
                     {
-                        if (matched) break;
+                        if (matchedFilter) break;
 
                         switch (filterCheck)
                         {
                             case "online":
-                                if (acct.IsOnline)
-                                {
-                                    matched = true;
-                                }
+                                matchedFilter = acct.IsOnline;
                                 break;
                             case "friends":
-                                if (acct.IsFriend(pRequestingAcct))
-                                {
-                                    matched = true;
-                                }
+                                matchedFilter = acct.IsFriend(pRequestingAcct);
                                 break;
                             case "connections":
-                                if (acct.IsConnected(pRequestingAcct))
-                                {
-                                    matched = true;
-                                }
+                                matchedFilter = acct.IsConnected(pRequestingAcct);
                                 break;
                             default:
                                 break;
                         }
                     }
                 }
-                if (!matched && !String.IsNullOrEmpty(_status))
+                if (statusing)
                 {
                     string[] pieces = _status.Split(",");
                     foreach (var statusCheck in pieces)
                     {
-                        if (matched) break;
+                        if (matchedStatus) break;
 
                         switch (statusCheck)
                         {
                             case "online":
-                                if (acct.IsOnline)
-                                {
-                                    matched = true;
-                                }
+                                matchedStatus = acct.IsOnline;
                                 break;
                             default:
                                 break;
                         }
                     }
                 }
-                if (!matched && !String.IsNullOrEmpty(_search))
+                if (searching)
                 {
                     // TODO: does this do wildcard things?
                     if (_search == acct.Username)
                     {
-                        matched = true;
+                        matchedSearch = true;
                     }
                 }
-                if (matched) yield return acct;
+                if ((!filtering && !statusing && !searching)    // if not doing any selection
+                    || ((filtering && matchedFilter)            // if any of the filters matched
+                        || (statusing && matchedStatus)
+                        || (searching && matchedSearch)))
+                {
+                    yield return acct;
+                }
             }
             yield break;
         }
@@ -208,8 +203,16 @@ namespace Project_Apollo.Hooks
     {
         private static readonly string _logHeader = "[AccountScopeInfo]";
         AccountEntity _contextAccount;
-        public AccountScopeFilter(AccountEntity pAccount)
+        bool _asAdmin = false;
+        public AccountScopeFilter(RESTRequestData pReq, AccountEntity pAccount)
         {
+            _asAdmin = pReq.Queries.TryGetValue("asAdmin", out _);
+            _contextAccount = pAccount;
+        }
+
+        public AccountScopeFilter(AccountEntity pAccount, bool pAsAdmin)
+        {
+            _asAdmin = pAsAdmin;
             _contextAccount = pAccount;
         }
 
@@ -224,16 +227,13 @@ namespace Project_Apollo.Hooks
                 bool matched = false;
                 if (_contextAccount != null)
                 {
-                    if (_contextAccount.IsAdmin)
+                    if (_asAdmin && _contextAccount.IsAdmin)
                     {
                         matched = true;
                     }
                     else
                     {
-                        if (_contextAccount.IsConnected(acct))
-                        {
-                            matched = true;
-                        }
+                        matched = _contextAccount.IsConnected(acct);
                     }
                 }
                 if (matched) yield return acct;
