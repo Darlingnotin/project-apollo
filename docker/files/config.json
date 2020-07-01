@@ -1,0 +1,7 @@
+{
+    "Storage.Dir": "/var/vircadia/content/",
+
+    "LogLevel": "Debug",
+    "Logger.ForceFlush": true,
+    "Debug.Processing": true
+}

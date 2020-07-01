@@ -1,4 +1,4 @@
-﻿//   Copyright 2020 Vircadia
+//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -16,10 +16,13 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.IO;
+
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using System.Text.RegularExpressions;
-using HttpUtils;
+
+using HttpMultipartParser;
+using System.Linq;
+using System.Text.Encodings.Web;
 
 namespace Project_Apollo.Registry
 {
@@ -31,7 +34,7 @@ namespace Project_Apollo.Registry
     {
         private static readonly string _logHeader = "[RESTRequestData]";
 
-        private HttpListenerContext _listenerContext;
+        private readonly HttpListenerContext _listenerContext;
 
         public RESTRequestData(HttpListenerContext pCtx)
         {
@@ -40,7 +43,6 @@ namespace Project_Apollo.Registry
 
         private string _requestBody;
         // Returns the body of the  requests as a string.
-        // This will throw an exception if the body is not text (ie, form data, ...)
         public string RequestBody
         {
             get
@@ -51,20 +53,20 @@ namespace Project_Apollo.Registry
                     {
                         if (_listenerContext.Request.HasEntityBody)
                         {
-                            string contentType = _listenerContext.Request.ContentType;
-                            if (contentType == "application/json" || contentType == "text/html")
-                            {
-                                using (Stream body = _listenerContext.Request.InputStream)
-                                {
-                                    using (StreamReader sr = new StreamReader(body, _listenerContext.Request.ContentEncoding))
-                                    {
-                                        _requestBody = sr.ReadToEnd();
-                                    }
-                                }
-                            }
+                            // For the moment, if the caller asks for the body, just return it.
+                            //     This presumes the caller has checked the contentType.
+                            // string contentType = _listenerContext.Request.ContentType;
+                            // if (contentType == "application/json"
+                            //             || contentType == "text/html"
+                            //             || contentType == "application/x-www-form-urlencoded")
+                            // {
+                                using Stream body = _listenerContext.Request.InputStream;
+                                using StreamReader sr = new StreamReader(body, _listenerContext.Request.ContentEncoding);
+                                _requestBody = sr.ReadToEnd();
+                            // }
                         }
                     }
-                    catch (Exception e)
+                    catch
                     {
                         Context.Log.Error("{0} Exception fetching request body. URL={1}",
                                     _logHeader, _listenerContext.Request.RawUrl);
@@ -104,43 +106,25 @@ namespace Project_Apollo.Registry
         /// </summary>
         /// <param name="pPartname"></param>
         /// <returns></returns>
-        private IDictionary<string, string> _TextBodyFiles;
-        private IDictionary<string, byte[]> _BinBodyFiles;
-        public byte[] RequestBinBodyFile(string pPartname)
+        private MultipartFormDataParser _BodyParser;
+        public string RequestBodyMultipart(string pPartname)
         {
-            string contentType = _listenerContext.Request.ContentType;
             GetBodyFiles();
-            if (contentType.StartsWith("multipart/form-data;"))
-            {
-                if (_BinBodyFiles.ContainsKey(pPartname))
-                {
-                    return _BinBodyFiles[pPartname];
-                }
-            }
-            return null;
+            return _BodyParser.GetParameterValue(pPartname);
         }
-        public string RequestTextBodyFile(string pPartname)
+        public Stream RequestBodyMultipartStream(string pPartname)
         {
             string contentType = _listenerContext.Request.ContentType;
             GetBodyFiles();
-            if (contentType.StartsWith("multipart/form-data;"))
-            {
-                if (_TextBodyFiles.ContainsKey(pPartname))
-                {
-                    return _TextBodyFiles[pPartname];
-                }
-            }
-            return null;
+            FilePart fileHandle = _BodyParser.Files.Where(fl => { return fl.FileName == pPartname; }).First();
+            return fileHandle?.Data;
         }
         // Make sure the parsed multipart form data has been parsed
         private void GetBodyFiles()
         {
-            if (_BinBodyFiles == null)
+            if (_BodyParser == null)
             {
-                HttpMultipartParser mpParser = new HttpMultipartParser(_listenerContext.Request.InputStream, "");
-
-                _TextBodyFiles = mpParser.MultipartBodies;
-                _BinBodyFiles = mpParser.MultipartBinBodies;
+                _BodyParser = MultipartFormDataParser.Parse(_listenerContext.Request.InputStream);
             }
         }
         /// <summary>
@@ -201,18 +185,78 @@ namespace Project_Apollo.Registry
             {
                 if (_queryParameters == null)
                 {
-                    _queryParameters = Tools.NVC2Dict(_listenerContext.Request.QueryString);
+                    // 'Request.QueryString' is odd for queries without values so
+                    //     this does its own parsing
+                    _queryParameters = new Dictionary<string, string>();
+
+                    var queryString = _listenerContext.Request.Url.Query;
+                    if (queryString.StartsWith("?"))
+                    {
+                        queryString = queryString.Substring(1);
+                    }
+
+                    string[] queries = queryString.Split("&");
+                    foreach (var query in queries)
+                    {
+                        string[] queryPieces = query.Split("=");
+                        if (queryPieces.Length == 1)
+                        {
+                            _queryParameters.Add(queryPieces[0], "true");
+                        }
+                        else
+                        {
+                            if (queryPieces.Length == 2)
+                            {
+                                _queryParameters.Add(queryPieces[0], WebUtility.UrlDecode(queryPieces[1]));
+                            }
+                        }
+                    }
                 }
-                return _headers;
+                return _queryParameters;
             }
         }
-        // Return the authorization token from the request. Return 'null' if no token
+        // Return the authorization token from the request. Return 'null' if no token.
+        // The 'Authorization' header is of the form "TYPE TOKENSTUFF". We know about
+        //     type "Bearer" which is just a long string.
+        // When fancier tokens are used, the logic here will have to change.
+        private string _authToken;
         public string AuthToken
         {
             get
             {
-                string token = _listenerContext.Request.Headers["Authorization"];
-                return token;
+                if (_authToken == null)
+                {
+                    string token = _listenerContext.Request.Headers.Get("Authorization");
+                    if (!String.IsNullOrEmpty(token))
+                    {
+                        string[] tokenPieces = token.Split(" ");
+                        if (tokenPieces.Length > 1)
+                        {
+                            if (tokenPieces[0].ToLower() == "bearer")
+                            {
+                                _authToken = String.Join(" ", tokenPieces[1..]);
+                            }
+                            else
+                            {
+                                _authToken = token;
+                            }
+                        }
+                        else
+                        {
+                            _authToken = token;
+                        }
+                    }
+                }
+                return _authToken;
+            }
+        }
+        // Return a key that identifies the sender.
+        // For the moment, we create a string with the remote IP addr and port
+        public string SenderKey
+        {
+            get
+            {
+                return _listenerContext.Request.RemoteEndPoint.ToString();
             }
         }
 
@@ -240,13 +284,13 @@ namespace Project_Apollo.Registry
         public string MIMEType;
         public RESTReplyData()
         {
-            Status = 200;   // Assume successful response
+            Status = (int)HttpStatusCode.OK;   // Assume successful response
             MIMEType = "text/json";
             CustomOutputHeaders = new Dictionary<string, string>();
         }
         public RESTReplyData(string pBody)
         {
-            Status = 200;   // Assume successful response
+            Status = (int)HttpStatusCode.OK;   // Assume successful response
             MIMEType = "text/json";
             CustomOutputHeaders = new Dictionary<string, string>();
             Body = pBody;

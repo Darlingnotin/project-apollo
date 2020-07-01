@@ -1,4 +1,4 @@
-﻿//   Copyright 2020 Vircadia
+//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ using System.Text;
 
 using Project_Apollo.Registry;
 using Microsoft.VisualBasic;
+using Project_Apollo.Configuration;
 
 namespace Project_Apollo.Hooks
 {
@@ -34,7 +35,7 @@ namespace Project_Apollo.Hooks
 
         // A collection of all the filenames in the static directory.
         // This is used to verify that any request is only for a static file.
-        static HashSet<string> staticFilenames = new HashSet<string>();
+        static readonly HashSet<string> staticFilenames = new HashSet<string>();
 
         [APIPath("/static/%", "GET", true)]
         public RESTReplyData get_page1(RESTRequestData pReq, List<string> pArgs)
@@ -54,7 +55,7 @@ namespace Project_Apollo.Hooks
         public RESTReplyData get_page(RESTRequestData pReq, List<string> pArgs)
         {
             Context.Log.Debug("{0} GET /static/: {1}", _logHeader, pReq.RawURL);
-            string baseDir = Context.Params.P<string>("Storage.StaticDir");
+            string baseDir = Context.Params.P<string>(AppParams.P_STORAGE_STATIC_DIR);
 
             // If the global list of static filenames hasn't been built, build it
             lock (staticFilenames)
@@ -70,17 +71,21 @@ namespace Project_Apollo.Hooks
             string afterString = String.Join(Path.DirectorySeparatorChar, pArgs);
 
             string filename = Path.Combine(baseDir, afterString);
-            if (staticFilenames.Contains(filename))
+            if (staticFilenames.Contains(filename.ToLower()))
             {
                 if (File.Exists(filename))
                 {
                     replyData.Body = File.ReadAllText(filename);
-                    string mimeType = "text/text";
-                    if (filename.EndsWith(".css")) mimeType = "text/css";
-                    if (filename.EndsWith(".json")) mimeType = "text/json";
-                    if (filename.EndsWith(".yaml")) mimeType = "text/yaml";
-                    if (filename.EndsWith(".html")) mimeType = "text/html";
-                    if (filename.EndsWith(".js")) mimeType = "text/javascript";
+                    string exten = Path.GetExtension(filename);
+                    var mimeType = exten switch
+                    {
+                        ".css" => "text/css",
+                        ".json" => "text/json",
+                        ".yaml" => "text/yaml",
+                        ".html" => "text/html",
+                        ".js" => "text/javascript",
+                        _ => "text/text",
+                    };
                     replyData.MIMEType = mimeType;
                 }
                 else
@@ -104,7 +109,10 @@ namespace Project_Apollo.Hooks
         private void AddToStaticFilenames(string pDir)
         {
             // Add all the filenames to the collection
-            staticFilenames.UnionWith(Directory.EnumerateFiles(pDir));
+            staticFilenames.UnionWith(Directory.EnumerateFiles(pDir).Select( dir =>
+            {
+                return dir.ToLower();
+            }) );
             // Recurse into each of the directories and collect the files therein
             foreach (var dir in Directory.EnumerateDirectories(pDir))
             {

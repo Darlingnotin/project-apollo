@@ -18,6 +18,7 @@ using System.Net;
 using System.Reflection;
 using System.IO;
 using Newtonsoft.Json;
+using Project_Apollo.Configuration;
 
 namespace Project_Apollo.Registry
 {
@@ -54,7 +55,7 @@ namespace Project_Apollo.Registry
                     {
                         asm = AppDomain.CurrentDomain.GetAssemblies()[i];
                     }
-                    catch(Exception e)
+                    catch
                     {
                         // nothing needs be done here
                         Context.Log.Error("{0} No assemblies found", _logHeader);
@@ -88,8 +89,8 @@ namespace Project_Apollo.Registry
                                             _path.AssignedMethod = mi;
                                             foundPaths.Add(_path);
 
-                                            Context.Log.Debug("{0} Discovered: {1}; {2}",
-                                                        _logHeader, _path.PathLike, mi.Name);
+                                            Context.Log.Debug("{0} Discovered: {1} {2}; {3}",
+                                                        _logHeader, _path.HTTPMethod, _path.PathLike, mi.Name);
                                         }
                                     }
                                 }
@@ -116,7 +117,6 @@ namespace Project_Apollo.Registry
         public APIPath FindPathProcessor(string pRawURL, string pMethod, out List<string> oArguments)
         {
             APIPath ret = null;
-            Dictionary<string, string> queryArguments = new Dictionary<string, string>();
             // compare strings; If a % symbol is located, then skip that so long as
             //      the inbound string matches totally.
             // Append the value of % in the inbound request to the array passed to the function
@@ -131,24 +131,22 @@ namespace Project_Apollo.Registry
                 if (pMethod == apiPath.HTTPMethod)
                 {
                     string requestString = pRawURL;
-                    string queryString = null;
 
                     // See if the request has a query part. If so, extract same
                     int queryIndex = requestString.IndexOf('?');
                     if (queryIndex != -1)
                     {
-                        queryString = requestString.Substring(queryIndex + 1);
                         requestString = requestString.Substring(0, queryIndex);
                     }
 
                     string[] matchPieces = apiPath.PathLike.Split(new[] { '/' });
-                    string[] reqPieces = requestString.ToLower().Split(new[] { '/' });
+                    string[] reqPieces = requestString.Split(new[] { '/' });
 
-                    bool matchFound = true;
                     // if the length doesn't match, this cannot match
                     if (matchPieces.Length == reqPieces.Length)
                     {
                         // Loop through the pieces and verify they match
+                        bool matchFound = true;
                         for (int ii = 0; ii < matchPieces.Length; ii++)
                         {
                             if (matchPieces[ii] == "%")
@@ -197,8 +195,13 @@ namespace Project_Apollo.Registry
             if (foundPath != null)
             {
                 // Found the matching, process the request
-                Context.Log.Debug("{0} Processing '{1}:{2}' with {3}", _logHeader,
-                                            pReq.Method, pReq.RawURL, foundPath.AssignedMethod.Name);
+                if (Context.Params.P<bool>(AppParams.P_DEBUG_PROCESSING))
+                {
+                    Context.Log.Debug("{0} Processing '{1}:{2} from {3}:{4}' with {5}", _logHeader,
+                                                pReq.Method, pReq.RawURL,
+                                                pReq.RemoteUser, pReq.RemotePort,
+                                                foundPath.AssignedMethod.Name);
+                }
                 try
                 {
                     object _method = Activator.CreateInstance(foundPath.AssignedMethod.DeclaringType);

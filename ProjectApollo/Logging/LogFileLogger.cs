@@ -1,4 +1,4 @@
-﻿//   Copyright 2020 Vircadia
+//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -17,11 +17,16 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
+using Project_Apollo.Configuration;
+using Project_Apollo.Entities;
+
 namespace Project_Apollo.Logging
 {
     public class LogFileLogger : Logger
     {
         private readonly LogWriter _logWriter;
+        private Logger _consoleLogger;
+
         /// <summary>
         /// Create a logger that writes to a file.
         /// There will be multiple files (rotated the number of minutes specified)
@@ -29,18 +34,32 @@ namespace Project_Apollo.Logging
         /// The target directory is created if it doesn't exist.
         /// </summary>
         /// <param name="pLogDirectory">Directory to create the log files</param>
-        public LogFileLogger(string pLogDirectory) : base()
+        /// <param name="pAlsoLogToConsole">if 'true', also write to the console each message</param>
+        public LogFileLogger(string pLogDirectory, bool pAlsoLogToConsole=false) : base()
         {
+            string logDir = EntityStorage.GenerateAbsStorageLocation(pLogDirectory);
             // Verify the log directory exists
-            if (!Directory.Exists(pLogDirectory))
+            if (!Directory.Exists(logDir))
             {
-                Directory.CreateDirectory(pLogDirectory);
+                Directory.CreateDirectory(logDir);
+            }
+
+            if (pAlsoLogToConsole)
+            {
+                _consoleLogger = new ConsoleLogger();
+                _consoleLogger.LogLevel = LogLevel;
             }
 
             // Initialize the logger with a default log level.
-            int rotateMinutes = Context.Params.P<int>("Logger.RotateMins");
-            bool forceFlush = Context.Params.P<bool>("Logger.ForceFlush");
-            _logWriter = new LogWriter(pLogDirectory, "MetaverseServer-", rotateMinutes, forceFlush);
+            int rotateMinutes = Context.Params.P<int>(AppParams.P_LOGGER_ROTATE_MINS);
+            bool forceFlush = Context.Params.P<bool>(AppParams.P_LOGGER_FORCE_FLUSH);
+            _logWriter = new LogWriter(logDir, "MetaverseServer-", rotateMinutes, forceFlush);
+        }
+
+        public override void SetLogLevel(string pLevel)
+        {
+            base.SetLogLevel(pLevel);
+            if (_consoleLogger != null) _consoleLogger.SetLogLevel(pLevel);
         }
 
         /// <summary>
@@ -71,7 +90,8 @@ namespace Project_Apollo.Logging
                     || LogLevel == LogLevels.Warn
                     || LogLevel == LogLevels.Debug))
             {
-                _logWriter.Write(String.Format(pMsg, pParms));
+                _logWriter.Write("INFO," + String.Format(pMsg, pParms));
+                if (_consoleLogger != null) _consoleLogger.Info(pMsg, pParms);
             }
         }
         public override void Warn(string pMsg, params object[] pParms)
@@ -80,7 +100,8 @@ namespace Project_Apollo.Logging
                 && (LogLevel == LogLevels.Warn
                     || LogLevel == LogLevels.Debug))
             {
-                _logWriter.Write(String.Format(pMsg, pParms));
+                _logWriter.Write("WARN," + String.Format(pMsg, pParms));
+                if (_consoleLogger != null) _consoleLogger.Debug(pMsg, pParms);
             }
         }
         public override void Debug(string pMsg, params object[] pParms)
@@ -88,14 +109,16 @@ namespace Project_Apollo.Logging
             if (_logWriter != null
                 && ( LogLevel == LogLevels.Debug))
             {
-                _logWriter.Write(String.Format(pMsg, pParms));
+                _logWriter.Write("DEBUG," + String.Format(pMsg, pParms));
+                if (_consoleLogger != null) _consoleLogger.Debug(pMsg, pParms);
             }
         }
         public override void Error(string pMsg, params object[] pParms)
         {
             if (_logWriter != null)
             {
-                _logWriter.Write(String.Format(pMsg, pParms));
+                _logWriter.Write("ERROR," + String.Format(pMsg, pParms));
+                if (_consoleLogger != null) _consoleLogger.Error(pMsg, pParms);
             }
         }
     }

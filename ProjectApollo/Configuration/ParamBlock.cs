@@ -143,7 +143,7 @@ namespace Project_Apollo.Configuration
             // Create a description for this parameter that can be used in a list of parameters.
             // For better listings, there is a special 'separator' parameter that is just for the description.
             //      These separator parameters start with an equal sign ('=').
-            const int leader = 20;
+            const int LEADER = 20;
             public override string ToString()
             {
                 StringBuilder buff = new StringBuilder();
@@ -161,9 +161,9 @@ namespace Project_Apollo.Configuration
                     buff.Append(": ");
                 }
                 // Provide tab like padding between the name and the description
-                if (buff.Length < leader)
+                if (buff.Length < LEADER)
                 {
-                    buff.Append("                                        ".Substring(0, leader - buff.Length));
+                    buff.Append("                                        ".Substring(0, LEADER - buff.Length));
                 }
                 buff.Append(desc);
                 // Add the type and the default value of the parameter

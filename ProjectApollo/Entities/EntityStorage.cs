@@ -1,4 +1,4 @@
-﻿//   Copyright 2020 Vircadia
+//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-
+using System.Linq.Expressions;
 using Newtonsoft.Json;
+using Project_Apollo.Configuration;
 
 namespace Project_Apollo.Entities
 {
@@ -29,7 +30,7 @@ namespace Project_Apollo.Entities
         [JsonIgnore]    // field used for management and not serialized out
         public DateTime LastAccessed;
         [JsonIgnore]
-        private EntityStorage _storageSystem;
+        private readonly EntityStorage _storageSystem;
 
         public EntityMem(EntityStorage pStorageSystem)
         {
@@ -56,7 +57,6 @@ namespace Project_Apollo.Entities
     /// Entities are stored as JSON files in the directory "entityType/entityStorageName".
     /// Entities are kept in memory for quick reference and read or
     ///     written out as needed.
-    /// Entities are flushed from in memory after "Storage.IdleMinutes" minutes.
     /// </summary>
     public abstract class EntityStorage
     {
@@ -69,14 +69,54 @@ namespace Project_Apollo.Entities
 
         protected string _entityStorageDir;
 
+        /// <summary>
+        /// Given a directory name and an optional filename, create the absolute
+        /// address to that item. If only a directory is passed, this returns
+        /// the computed directory path. If the directory passed is relative,
+        /// it is made absolute based on "Storage.Dir" parameter.
+        /// </summary>
+        /// <param name="pDir">directory for the item. May be null or empty.</param>
+        /// <param name="pItem">Optional filename to add to the path</param>
+        /// <returns>Absolute directory path</returns>
+        public static string GenerateAbsStorageLocation(string pDir, string pItem = null)
+        {
+            string ret;
+            string storageDir = Path.GetFullPath(Context.Params.P<string>(AppParams.P_STORAGE_DIR));
+
+            if (String.IsNullOrEmpty(pDir))
+            {
+                // No dir specified. Just return the base storage directory.
+                ret = storageDir;
+            }
+            else
+            {
+                if (pDir.StartsWith("/") || pDir.StartsWith(Path.DirectorySeparatorChar))
+                {
+                    // The passed directory is absolute so it's good enough
+                    ret = Path.GetFullPath(pDir);
+                }
+                else
+                {
+                    // path is relative. Make abs relative to "Storage.Dir"
+                    // The GetFullPath() will correct the directory separators in the config path
+                    ret = Path.Combine(storageDir, pDir);
+                }
+            }
+            // If a trailing filename was specified, add it
+            if (!String.IsNullOrEmpty(pItem))
+            {
+                ret = Path.Combine(ret, pItem);
+            }
+            return ret;
+        }
         public EntityStorage(string pEntityTypeName)
         {
             _storageEntityTypeName = pEntityTypeName;
 
 
-            // The GetFullPath() will correct the directory separators in the config path
-            string fullDirPath = Path.GetFullPath(Context.Params.P<string>("Storage.Dir"));
-            _entityStorageDir = Path.Combine( fullDirPath, _storageEntityTypeName);
+            _entityStorageDir = EntityStorage.GenerateAbsStorageLocation(
+                                    Context.Params.P<string>(AppParams.P_ENTITY_DIR),
+                                    _storageEntityTypeName);
 
             Context.Log.Debug("{0} Storing {1} entities into {2}", _logHeader, _storageEntityTypeName, _entityStorageDir);
             lock (_storageLock)
@@ -102,17 +142,50 @@ namespace Project_Apollo.Entities
             return File.Exists(EntityFilename(pStorageName));
         }
 
-        public T FetchFromStorage<T>(string pStorageName)
+        // Fetch the entity give its storage name.
+        // Throws an exception if the entity could not be read.
+        public virtual T FetchFromStorage<T>(string pStorageName)
         {
-            T entity =  JsonConvert.DeserializeObject<T>(File.ReadAllText(EntityFilename(pStorageName)));
+            T entity = default;
+            lock (_storageLock)
+            {
+                string body = File.ReadAllText(EntityFilename(pStorageName));
+                entity =  JsonConvert.DeserializeObject<T>(body);
+            }
             return entity;
         }
 
-        public void StoreInStorage(EntityMem pEntity)
+        public virtual void StoreInStorage(EntityMem pEntity)
         {
-            File.WriteAllText(EntityFilename(pEntity), JsonConvert.SerializeObject(pEntity, Formatting.Indented));
+            lock (_storageLock) {
+                try
+                {
+                    File.WriteAllText(EntityFilename(pEntity),
+                            JsonConvert.SerializeObject(pEntity, Formatting.Indented));
+                }
+                catch (Exception e)
+                {
+                    Context.Log.Error("{0} Exception writing entity to storage. dir={1}, storeName={2}, e={3}",
+                                _logHeader, _entityStorageDir, pEntity.StorageName(), e);
+                }
+            }
         }
-
+        public virtual void RemoveFromStorage(EntityMem pEntity)
+        {
+            lock (_storageLock)
+            {
+                try
+                {
+                    File.Delete(EntityFilename(pEntity));
+                }
+                catch (Exception e)
+                {
+                    Context.Log.Error("{0} Exception deleting entity from storage. dir={1}, storeName={2}, e={3}",
+                                _logHeader, _entityStorageDir, pEntity.StorageName(), e);
+                }
+            }
+        }
+        // Create the storage filename from an entity storage name
         protected string EntityFilename(string pStorageName)
         {
             return _entityStorageDir
@@ -120,6 +193,7 @@ namespace Project_Apollo.Entities
                         + pStorageName
                         + ".json";
         }
+        // Create the storage filename from an entity
         protected string EntityFilename(EntityMem pEntity)
         {
             return _entityStorageDir
@@ -133,7 +207,7 @@ namespace Project_Apollo.Entities
         /// This is used when starting up to file the list of entities
         /// </summary>
         /// <typeparam name="T"></typeparam>
-        protected IEnumerable<T> AllEntities<T>()
+        protected IEnumerable<T> AllStoredEntities<T>()
         {
             foreach (string dirFile in Directory.EnumerateFiles(_entityStorageDir))
             {
@@ -150,12 +224,12 @@ namespace Project_Apollo.Entities
                                 _logHeader, dirFile, e.ToString());
                     fetchSuccess = false;
                 }
-                if (fetchSuccess)
+                if (fetchSuccess && anEntity != null)
                 {
                     yield return anEntity;
                 }
             }
+            yield break;
         }
-
     }
 }

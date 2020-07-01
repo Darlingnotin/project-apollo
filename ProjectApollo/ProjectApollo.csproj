@@ -8,13 +8,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Http-Multipart-Data-Parser\**" />
-    <EmbeddedResource Remove="Http-Multipart-Data-Parser\**" />
-    <None Remove="Http-Multipart-Data-Parser\**" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <PackageReference Include="BCrypt.Net-Next" Version="4.0.0" />
+    <PackageReference Include="HttpMultipartParser" Version="4.3.1" />
+    <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="1.3.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="16.7.0-preview-20200428-01" />
+    <PackageReference Include="Nerdbank.GitVersioning" Version="3.2.7-beta">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Newtonsoft.Json" Version="12.0.3" />
     <PackageReference Include="NUnit" Version="3.12.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="3.17.0-beta.1" />
@@ -23,6 +24,18 @@
 
   <ItemGroup>
     <Folder Include="Statistics\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="static\domaintoken.js">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="static\DomainTokenLogin.html">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="static\tokenlogin.css">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

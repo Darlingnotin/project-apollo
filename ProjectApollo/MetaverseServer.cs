@@ -14,7 +14,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.Specialized;
 using System.Data.Common;
 using System.IO;
 using System.Net;
@@ -26,7 +25,6 @@ using Project_Apollo.Logging;
 using Project_Apollo.Configuration;
 using Project_Apollo.Registry;
 using Project_Apollo.Entities;
-using System.Text.RegularExpressions;
 
 namespace Project_Apollo
 {
@@ -38,20 +36,20 @@ namespace Project_Apollo
     /// </summary>
     public class Context
     {
-        static public AppParams Params;
-        static public Logger Log;
+        public static AppParams Params;
+        public static Logger Log;
 
         // If cancelled, everything shuts down
-        static public CancellationTokenSource KeepRunning;
+        public static CancellationTokenSource KeepRunning;
 
         // The HTTP listener that's waiting for requests
-        static public HttpListener Listener;
+        public static HttpListener Listener;
 
         // The database we're talking to
-        static public DbConnection Db;
+        public static DbConnection Db;
 
         // All the request path handles are registered in the registry
-        static public APIRegistry PathRegistry;
+        public static APIRegistry PathRegistry;
     }
 
     /// <summary>
@@ -69,20 +67,35 @@ namespace Project_Apollo
         static void Main(string[] args)
         {
             // Temp logger for startup errors
-            Context.Log = new ConsoleLogger();
-            Context.Log.LogLevel = Logger.LogLevels.Info;
+            Context.Log = new ConsoleLogger
+            {
+                LogLevel = Logger.LogLevels.Info
+            };
 
             // Setup global Context
             Context.Params = new AppParams(args);
-            Context.Log = new LogFileLogger(Context.Params.P<string>("Logger.LogDirectory"));
-            Context.Log.SetLogLevel(Context.Params.P<string>("LogLevel"));
+            Context.Params.LoadSiteParameters();
+            Context.Log = new LogFileLogger(Context.Params.P<string>(AppParams.P_LOGGER_LOG_DIR),
+                                            Context.Params.P<bool>(AppParams.P_CONSOLELOG));
+            Context.Log.SetLogLevel(Context.Params.P<string>(AppParams.P_LOGLEVEL));
 
-            if (Context.Params.P<bool>("Verbose") || !Context.Params.P<bool>("Quiet"))
+            // If asked for the version, just print that out and exit
+            if (Context.Params.P<bool>(AppParams.P_VERSION))
             {
-                Console.WriteLine("WELCOME TO PROJECT APOLLO METAVERSE API SERVER");
+                Console.WriteLine("Version=" + ThisAssembly.AssemblyVersion);
+                Console.WriteLine("InformationalVersion=" + ThisAssembly.AssemblyInformationalVersion);
+                return;
             }
+
+            if (Context.Params.P<bool>(AppParams.P_VERBOSE) || !Context.Params.P<bool>(AppParams.P_QUIET))
+            {
+                Console.WriteLine("WELCOME TO PROJECT APOLLO METAVERSE API SERVER VERSION "
+                                + ThisAssembly.AssemblyInformationalVersion);
+            }
+
             // This log message has a UTC time header and a local time message
             Context.Log.Info("{0} Started at {1}", _logHeader, DateTime.Now.ToString());
+            Context.Log.Info("{0}      Version = {1}", _logHeader, ThisAssembly.AssemblyInformationalVersion);
 
             // Everything will keep running until this TokenSource is cancelled
             Context.KeepRunning = new CancellationTokenSource();
@@ -97,6 +110,34 @@ namespace Project_Apollo
         {
             // Collect all the HTTP request path handlers in the registry
             Context.PathRegistry = new APIRegistry();
+
+            // If the default ICE server address has not been set in the configuration file,
+            //      assume the ice server is on the same host as this application.
+            string defaultIceServer = Context.Params.P<string>(AppParams.P_DEFAULT_ICE_SERVER);
+            if (String.IsNullOrEmpty(defaultIceServer))
+            {
+                defaultIceServer = Tools.GetMyExternalIPAddress().Result;
+                Context.Params.SetSiteParameter(AppParams.P_DEFAULT_ICE_SERVER, defaultIceServer);
+                Context.Log.Info("{0} DefaultIceServer not set in config file. Defaulting to {1}",
+                                _logHeader, defaultIceServer);
+            }
+
+            // IF an official metaversere server url is not specified in the config file
+            //      assume the metaverse url is my address
+            string metaverserServerUrl = Context.Params.P<string>(AppParams.P_METAVERSE_SERVER_URL);
+            if (string.IsNullOrEmpty(metaverserServerUrl))
+            {
+                string myIPaddr = Tools.GetMyExternalIPAddress().Result;
+                metaverserServerUrl = "http://" + myIPaddr + ":" + Context.Params.P<int>(AppParams.P_LISTENER_PORT).ToString();
+                Context.Params.SetSiteParameter(AppParams.P_METAVERSE_SERVER_URL, metaverserServerUrl);
+                Context.Log.Info("{0} MetaverseServerUrl not set in config file. Defaulting to {1}",
+                                _logHeader, metaverserServerUrl);
+
+            }
+
+            // This causes these collection classes to initialize
+            _ = Domains.Instance;
+            _ = Accounts.Instance;
 
             // Database
             try
@@ -177,10 +218,11 @@ namespace Project_Apollo
             Context.Log.Debug("{0} Creating HttpListener", _logHeader);
             listener = new HttpListener();
 
-            // NOTE: on Windows10, you must add url to acl: netsh http add urlacl url=http://+:19400/ user=everyone
+            // NOTE: on Windows10, you must add url to acl:
+            //          netsh http add urlacl url=http://+:9400/ user=everyone
             string prefix = String.Format("http://{0}:{1}/",
-                            Context.Params.P<string>("Listener.Host"),
-                            Context.Params.P<int>("Listener.Port"));
+                            Context.Params.P<string>(AppParams.P_LISTENER_HOST),
+                            Context.Params.P<int>(AppParams.P_LISTENER_PORT));
             Context.Log.Debug("{0} HttpListener listening on '{1}", _logHeader, prefix);
             listener.Prefixes.Add(prefix);
 
@@ -212,14 +254,13 @@ namespace Project_Apollo
         /// <param name="pCtx"></param>
         private void ProcessHttpRequest(HttpListenerContext pCtx)
         {
-            Context.Log.Debug("{0} HTTP received {1} {2}", _logHeader, pCtx.Request.HttpMethod, pCtx.Request.RawUrl);
-
+            // Context.Log.Debug("{0} HTTP received {1} {2}", _logHeader, pCtx.Request.HttpMethod, pCtx.Request.RawUrl);
 
             // Find the processor for this request and do the operation
             // If the processing created any error, it will return reply data with the error.
             RESTReplyData _reply = Context.PathRegistry.ProcessInbound(new RESTRequestData(pCtx));
 
-            pCtx.Response.Headers.Add("Server", Context.Params.P<string>("Listener.Response.Header.Server"));
+            pCtx.Response.Headers.Add("Server", Context.Params.P<string>(AppParams.P_LISTENER_RESPONSE_HEADER_SERVER));
             
             pCtx.Response.StatusCode = _reply.Status;
             if (_reply.CustomStatus != null) pCtx.Response.StatusDescription = _reply.CustomStatus;
@@ -234,7 +275,9 @@ namespace Project_Apollo
 
             if (_reply.Body != null)
             {
-                // This resumes that all requests only return text
+                pCtx.Response.AddHeader("Content-Type", _reply.MIMEType);
+
+                // This presumes that all requests only return text
                 byte[] buffer = Encoding.UTF8.GetBytes("\n"+_reply.Body);
                 pCtx.Response.ContentLength64 = buffer.Length;
                 using (Stream output = pCtx.Response.OutputStream)

@@ -1,4 +1,4 @@
-﻿//   Copyright 2020 Vircadia
+//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -34,10 +34,11 @@ namespace Project_Apollo.Hooks
         public string Status;
         // NOTE: 'Data' is an object that  will be serialized by JSON!
         public object Data;
+        private readonly Dictionary<string, object> _additionalFields = new Dictionary<string, object>();
 
         public ResponseBody()
         {
-            Status = "success";
+            Status = "success"; // assume success
         }
         public ResponseBody(object pDataContents) {
             Data = pDataContents;
@@ -59,14 +60,40 @@ namespace Project_Apollo.Hooks
             Status = "fail";
             return this;
         }
+        public void ErrorData(string pBase, string pMessage)
+        {
+            Data = new Dictionary<string, string>()
+            {
+                { pBase, pMessage }
+            };
+        }
 
+        public void AddExtraTopLevelField(string pName, object pValue)
+        {
+            _additionalFields.Add(pName, pValue);
+        }
+
+        // If an instance is assigned to a string variable, the cast causes conversion to string
         public static implicit operator string(ResponseBody rb) => rb.ToString();
+        // Convert the body data into a JSON string
         public override string ToString()
         {
-            Dictionary<string, object> respBody = new Dictionary<string, object>();
-            respBody.Add("status", "success");
-            respBody.Add("data", Data);
-            return JsonConvert.SerializeObject(respBody);
+            Dictionary<string, object> respBody = new Dictionary<string, object>
+            {
+                { "status", Status }
+            };
+            foreach (var kvp in _additionalFields)
+            {
+                respBody.Add(kvp.Key, kvp.Value);
+            }
+            if (Data != null)
+            {
+                respBody.Add("data", Data);
+            }
+            return JsonConvert.SerializeObject(respBody, Formatting.None, new JsonSerializerSettings()
+            {
+                NullValueHandling = NullValueHandling.Ignore
+            });
         }
     }
 }
