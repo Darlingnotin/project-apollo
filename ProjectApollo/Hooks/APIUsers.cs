@@ -23,6 +23,8 @@ using Project_Apollo.Registry;
 
 using Newtonsoft.Json.Linq;
 using System.Linq;
+using System.Text.RegularExpressions;
+using Project_Apollo.Configuration;
 
 namespace Project_Apollo.Hooks
 {
@@ -110,6 +112,7 @@ namespace Project_Apollo.Hooks
         public struct bodyUser
         {
             public string username;
+            public string accountid;
             public string connection;
             public UserImages images;
             // the code seems to allow "location", "place", or "domain"
@@ -157,6 +160,7 @@ namespace Project_Apollo.Hooks
                         bodyUser ret = new bodyUser()
                         {
                             username = acct.Username,
+                            accountid = acct.AccountID,
                             images = acct.Images,
                         };
                         ret.location = BuildLocationInfo(acct);
@@ -187,7 +191,7 @@ namespace Project_Apollo.Hooks
             if (Sessions.Instance.ShouldBeThrottled(pReq.SenderKey, Sessions.Op.ACCOUNT_CREATE))
             {
                 respBody.RespondFailure();
-                respBody.ErrorData("operation", "throttled");
+                respBody.ErrorData("error", "throttled");
             }
             else
             {
@@ -199,22 +203,38 @@ namespace Project_Apollo.Hooks
                     string userPassword = requestData.user["password"];
                     string userEmail = requestData.user["email"];
 
-                    Context.Log.Debug("{0} Creating account {1}/{2}", _logHeader, userName, userEmail);
-
-                    AccountEntity newAcct = Accounts.Instance.CreateAccount(userName, userPassword, userEmail);
-                    if (newAcct == null)
+                    if (CheckUsernameFormat(userName))
                     {
-                        respBody.RespondFailure();
-                        respBody.ErrorData("username", "already exists");
-                        Context.Log.Debug("{0} Failed acct creation. Username already exists. User={1}",
-                                        _logHeader, userName);
+                        if (CheckEmailFormat(userEmail))
+                        {
+                            Context.Log.Debug("{0} Creating account {1}/{2}", _logHeader, userName, userEmail);
+
+                            AccountEntity newAcct = Accounts.Instance.CreateAccount(userName, userPassword, userEmail);
+                            if (newAcct == null)
+                            {
+                                respBody.RespondFailure();
+                                respBody.ErrorData("username", "already exists");
+                                Context.Log.Debug("{0} Failed acct creation. Username already exists. User={1}",
+                                                _logHeader, userName);
+                            }
+                            else
+                            {
+                                // Successful account creation
+                                newAcct.IPAddrOfCreator = pReq.SenderKey;
+                                newAcct.Updated();
+                                Context.Log.Debug("{0} Successful acct creation. User={1}", _logHeader, userName);
+                            }
+                        }
+                        else
+                        {
+                            respBody.RespondFailure();
+                            respBody.ErrorData("error", "bad format for email");
+                        }
                     }
                     else
                     {
-                        // Successful account creation
-                        newAcct.IPAddrOfCreator = pReq.SenderKey;
-                        newAcct.Updated();
-                        Context.Log.Debug("{0} Successful acct creation. User={1}", _logHeader, userName);
+                        respBody.RespondFailure();
+                        respBody.ErrorData("error", "bad format for username");
                     }
                 }
                 catch (Exception e)
@@ -227,6 +247,35 @@ namespace Project_Apollo.Hooks
             replyData.Body = respBody;
             return replyData;
 
+        }
+
+        private bool CheckUsernameFormat(string pUsername)
+        {
+            try
+            {
+                return Regex.IsMatch(pUsername, Context.Params.P<string>(AppParams.P_ACCOUNT_USERNAME_FORMAT),
+                                RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(20));
+            }
+            catch (Exception e)
+            {
+                Context.Log.Error("{0} CheckUsernameFormat: exception checking username {1}: {2}",
+                                _logHeader, pUsername, e);
+            }
+            return false;
+        }
+        private bool CheckEmailFormat(string pEmail)
+        {
+            try
+            {
+                return Regex.IsMatch(pEmail, Context.Params.P<string>(AppParams.P_ACCOUNT_EMAIL_FORMAT),
+                                RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(20));
+            }
+            catch (Exception e)
+            {
+                Context.Log.Error("{0} CheckUsernameFormat: exception checking email {1}: {2}",
+                                _logHeader, pEmail, e);
+            }
+            return false;
         }
 
         // = POST /api/v1/user/locker ==================================================
@@ -621,6 +670,7 @@ namespace Project_Apollo.Hooks
         public struct bodyUserProfileInfo
         {
             public string username;
+            public string accountid;
             public string xmpp_password;
             public string discourse_api_key;
             public string wallet_id;
@@ -638,6 +688,7 @@ namespace Project_Apollo.Hooks
                     user = new bodyUserProfileInfo()
                     {
                         username = aAccount.Username,
+                        accountid = aAccount.AccountID,
                         xmpp_password = aAccount.xmpp_password,
                         discourse_api_key = aAccount.discourse_api_key,
                         wallet_id = aAccount.wallet_id
@@ -735,6 +786,8 @@ namespace Project_Apollo.Hooks
         public struct bodyUserPublicKeyReply
         {
             public string public_key;
+            public string username;
+            public string accountid;
         }
         [APIPath("/api/v1/users/%/public_key", "GET", true)]
         public RESTReplyData get_public_key(RESTRequestData pReq, List<string> pArgs)
@@ -747,7 +800,9 @@ namespace Project_Apollo.Hooks
             {
                 respBody.Data = new bodyUserPublicKeyReply()
                 {
-                    public_key = aAccount.Public_Key
+                    public_key = aAccount.Public_Key,
+                    username = aAccount.Username,
+                    accountid = aAccount.AccountID
                 };
             }
             else

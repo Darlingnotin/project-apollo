@@ -1,4 +1,4 @@
-//   Copyright 2020 Vircadia
+﻿//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -234,7 +234,7 @@ namespace Project_Apollo.Registry
                         {
                             if (tokenPieces[0].ToLower() == "bearer")
                             {
-                                _authToken = String.Join(" ", tokenPieces[1..]);
+                                _authToken = String.Join(" ", tokenPieces[1..]).Trim();
                             }
                             else
                             {
@@ -285,14 +285,11 @@ namespace Project_Apollo.Registry
         public RESTReplyData()
         {
             Status = (int)HttpStatusCode.OK;   // Assume successful response
-            MIMEType = "text/json";
+            MIMEType = "application/json";
             CustomOutputHeaders = new Dictionary<string, string>();
         }
-        public RESTReplyData(string pBody)
+        public RESTReplyData(string pBody) : this()
         {
-            Status = (int)HttpStatusCode.OK;   // Assume successful response
-            MIMEType = "text/json";
-            CustomOutputHeaders = new Dictionary<string, string>();
             Body = pBody;
         }
     }
