@@ -110,11 +110,11 @@ namespace Project_Apollo.Hooks
             }
             else
             {
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
                 replyData.Status = (int)HttpStatusCode.Unauthorized;
             }
 
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -151,21 +151,17 @@ namespace Project_Apollo.Hooks
                         name = dobj.PlaceName
                     }
                 };
-                replyData.Body = respBody;  // serializes JSON
-                // Context.Log.Debug("{0} get_domain GET: domain{1}, returning: {2}",
-                //                     _logHeader, domainID, replyData.Body);
             }
             else
             {
                 // return nothing!
-                respBody.RespondFailure();
+                respBody.RespondFailure("No domain with that ID");
                 respBody.ErrorData("domain", "there is no domain with that ID");
 
                 replyData.Status = (int)HttpStatusCode.NotFound;
-                replyData.Body = respBody;
-                // Context.Log.Debug("{0} get_domain GET: no domain! Returning: {1}", _logHeader, replyData.Body);
             }
 
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -210,7 +206,7 @@ namespace Project_Apollo.Hooks
         public RESTReplyData domain_heartbeat(RESTRequestData pReq, List<string> pArgs)
         {
             RESTReplyData replyData = new RESTReplyData();  // The HTTP response info
-            // ResponseBody respBody = new ResponseBody();     // The request's "data" response info
+            ResponseBody respBody = new ResponseBody();     // The request's "data" response info
 
             SessionEntity aSession = Sessions.Instance.UpdateSession(pReq.SenderKey);
 
@@ -226,7 +222,7 @@ namespace Project_Apollo.Hooks
                     string apiKey = (string)domainStuff["api_key"];
 
                     // Context.Log.Debug("{0} domain_heartbeat. Received {1}", _logHeader, pReq.RequestBody);
-                    if (VerifyDomainAccess(aDomain, pReq, apiKey))
+                    if (VerifyDomainAccess(aDomain, pReq, apiKey, out string oFailureReason))
                     {
                         Tools.SetIfSpecified<string>(domainStuff, "version", ref aDomain.Version);
                         Tools.SetIfSpecified<string>(domainStuff, "protocol", ref aDomain.Protocol);
@@ -267,22 +263,25 @@ namespace Project_Apollo.Hooks
                     {
                         Context.Log.Error("{0} domain_heartbeat with bad authorization. domainID={1}",
                                                 _logHeader, domainID);
+                        respBody.RespondFailure(oFailureReason);
                         replyData.Status = (int)HttpStatusCode.Unauthorized;
                     }
                 }
                 catch (Exception e)
                 {
                     Context.Log.Error("{0} domain_heartbeat: Exception processing body: {1}", _logHeader, e.ToString());
+                    respBody.RespondFailure("exception processing body", e.ToString());
                     replyData.Status = (int)HttpStatusCode.BadRequest;
                 }
             }
             else
             {
                 Context.Log.Error("{0} domain_heartbeat: unknown domain. Returning 404", _logHeader);
+                respBody.RespondFailure("no such domain");
                 replyData.Status = (int)HttpStatusCode.NotFound; // this will trigger a new temporary domain name
             }
 
-            // replyData.Body = respBody; there is no body in the response
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -294,15 +293,20 @@ namespace Project_Apollo.Hooks
         /// <param name="pDomain"></param>
         /// <param name="pReq"></param>
         /// <returns></returns>
-        private bool VerifyDomainAccess(DomainEntity pDomain, RESTRequestData pReq, string pPossibleApiKey)
+        private bool VerifyDomainAccess(DomainEntity pDomain, RESTRequestData pReq, string pPossibleApiKey, out string oFailureReason)
         {
             bool ret = false;
+            string failure = null;
             if (String.IsNullOrEmpty(pReq.AuthToken))
             {
                 // No auth token. See if there is an APIKey and use that 
                 if (!String.IsNullOrEmpty(pDomain.API_Key))
                 {
                     ret = pDomain.API_Key.Equals(pPossibleApiKey);
+                    if (!ret)
+                    {
+                        failure = "API key does not match";
+                    }
                 }
             }
             else
@@ -329,6 +333,7 @@ namespace Project_Apollo.Hooks
                             Context.Log.Error("{0} Domain used authtoken from different acct. DomainID={1}, SponserID={2}, newAcct={3}",
                                     _logHeader, pDomain.DomainID, pDomain.SponserAccountID, oAccount.AccountID);
                             ret = false;
+                            failure = "Domain auth token does not match with sponsering account";
                         };
                     };
                 };
@@ -337,7 +342,12 @@ namespace Project_Apollo.Hooks
             {
                 Context.Log.Debug("{0} VerifyDomainAccess: failed auth. DomainID={1}, domain.apikey={2}, AuthToken={3}, apikey={4}",
                                     _logHeader, pDomain.DomainID, pDomain.API_Key, pReq.AuthToken, pPossibleApiKey);
+                if (String.IsNullOrEmpty(failure))
+                {
+                    failure = "Unauthorized";
+                }
             }
+            oFailureReason = failure;
             return ret;
         }
 
@@ -359,21 +369,22 @@ namespace Project_Apollo.Hooks
                     }
                     else
                     {
-                        respBody.RespondFailure();
+                        respBody.RespondFailure("No such domain");
                     }
                 }
                 else
                 {
-                    respBody.RespondFailure();
+                    respBody.RespondFailure("Requesting account is not an administrator");
                     replyData.Status = (int)HttpStatusCode.Unauthorized;
                 }
 
             }
             else
             {
-                respBody.RespondFailure();
-                replyData.Status = (int)HttpStatusCode.NotFound;
+                respBody.RespondFailure("Authorization token not found");
+                replyData.Status = (int)HttpStatusCode.Unauthorized;
             }
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -406,7 +417,7 @@ namespace Project_Apollo.Hooks
                 // Context.Log.Debug("{0} domains/ice_server_addr PUT. Body={1}", _logHeader, pReq.RequestBody);
                 bodyIceServerPut isr = pReq.RequestBodyObject<bodyIceServerPut>();
                 string includeAPIKey = isr.domain.api_key;
-                if (VerifyDomainAccess(aDomain, pReq, includeAPIKey))
+                if (VerifyDomainAccess(aDomain, pReq, includeAPIKey, out string oFailureReason))
                 {
                     aDomain.IceServerAddr = isr.domain.ice_server_address;
                 }
@@ -414,13 +425,13 @@ namespace Project_Apollo.Hooks
                 {
                     Context.Log.Error("{0} PUT domains/%/ice_server_address not authorized. DomainID={1}",
                                         _logHeader, domainID);
-                    respBody.RespondFailure();
+                    respBody.RespondFailure(oFailureReason);
                     replyData.Status = (int)HttpStatusCode.Unauthorized;
                 }
             }
             else
             {
-                respBody.RespondFailure();
+                respBody.RespondFailure("No such domain");
                 replyData.Status = (int)HttpStatusCode.NotFound;
             }
             return replyData;
@@ -454,7 +465,7 @@ namespace Project_Apollo.Hooks
                     api_key = newDomain.API_Key
                 }
             };
-            replyData.Body = respBody;  // serializes JSON
+            replyData.SetBody(respBody, pReq);
             Context.Log.Debug("{0} Returning temporary domain: id={1}, name={2}",
                         _logHeader, newDomain.DomainID, newDomain.PlaceName);
             
@@ -477,7 +488,7 @@ namespace Project_Apollo.Hooks
                 try
                 {
                     string includedAPIKey = pReq.RequestBodyMultipart("api_key");
-                    if (VerifyDomainAccess(aDomain, pReq, includedAPIKey))
+                    if (VerifyDomainAccess(aDomain, pReq, includedAPIKey, out string oFailureReason))
                     {
                         // The PUT sends the key as binary but it is later sent around
                         //    and processed as a Base64 string.
@@ -493,7 +504,7 @@ namespace Project_Apollo.Hooks
                             Context.Log.Error("{0} could not extract public key from request body: domain {1}",
                                                 _logHeader, domainID);
                             replyData.Status = (int)HttpStatusCode.Unauthorized;
-                            respBody.RespondFailure();
+                            respBody.RespondFailure("Could not extract public key from request body");
                         }
                     }
                     else
@@ -501,23 +512,23 @@ namespace Project_Apollo.Hooks
                         Context.Log.Error("{0} attempt to set public_key when no authorized: domain {1}",
                                             _logHeader, domainID);
                         replyData.Status = (int)HttpStatusCode.Unauthorized;
-                        respBody.RespondFailure();
+                        respBody.RespondFailure(oFailureReason);
                     }
                 }
                 catch (Exception e)
                 {
                     Context.Log.Error("{0} exception parsing multi-part http: {1}", _logHeader, e.ToString());
-                    respBody.RespondFailure();
+                    respBody.RespondFailure("Exception parsing multi-part http", e.ToString());
                 }
 
             }
             else
             {
                 Context.Log.Error("{0} attempt to set public_key for unknown domain {1}", _logHeader, domainID);
-                respBody.RespondFailure();
+                respBody.RespondFailure("unknown domain");
             }
 
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -543,16 +554,13 @@ namespace Project_Apollo.Hooks
             else
             {
                 // return nothing!
-                respBody.RespondFailure();
-                respBody.Data = new Dictionary<string, string>()
-                {
-                    {  "domain", "there is no domain with that ID" }
-                };
+                respBody.RespondFailure("unknown domain");
+                respBody.ErrorData("domain", "there is no domain with that ID");    // legacy HiFi compatibility
                 replyData.Status = (int)HttpStatusCode.NotFound;
                 // Context.Log.Debug("{0} get_domain GET: no domain! Returning: {1}", _logHeader, replyData.Body);
             }
 
-            replyData.Body = respBody;  // serializes JSON
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
     }

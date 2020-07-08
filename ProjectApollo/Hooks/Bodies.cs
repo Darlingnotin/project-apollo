@@ -1,4 +1,4 @@
-//   Copyright 2020 Vircadia
+﻿//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ namespace Project_Apollo.Hooks
     /// </summary>
     public class ResponseBody
     {
+        public bool Failure;    // 'true' if request failed
         public string Status;
         // NOTE: 'Data' is an object that  will be serialized by JSON!
         public object Data;
@@ -38,34 +39,38 @@ namespace Project_Apollo.Hooks
 
         public ResponseBody()
         {
-            Status = "success"; // assume success
+            this.RespondSuccess();  // assume success
         }
-        public ResponseBody(object pDataContents) {
-            Data = pDataContents;
-        }
-
-        public ResponseBody(string pStatus, object pDataContents) {
-            Status = pStatus;
-            Data = pDataContents;
-        }
-
         public ResponseBody RespondSuccess()
         {
             Status = "success";
+            Failure = false;
             return this;
         }
 
-        public ResponseBody RespondFailure()
+        public ResponseBody RespondFailure(string pMsg, string pMsg2 = null)
         {
             Status = "fail";
+            if (!String.IsNullOrEmpty(pMsg))
+            {
+                this.ErrorData("error", pMsg);
+            }
+            if (!String.IsNullOrEmpty(pMsg2))
+            {
+                this.ErrorData("errorInfo", pMsg2);
+            }
             return this;
         }
         public void ErrorData(string pBase, string pMessage)
         {
-            Data = new Dictionary<string, string>()
+            if (Data == null)
             {
-                { pBase, pMessage }
-            };
+                Data = new Dictionary<string, string>();
+            }
+            if (Data is Dictionary<string, string> dictData)
+            {
+                dictData.Add(pBase, pMessage);
+            }
         }
 
         public void AddExtraTopLevelField(string pName, object pValue)
