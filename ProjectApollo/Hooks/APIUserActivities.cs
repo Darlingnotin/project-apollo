@@ -63,7 +63,7 @@ namespace Project_Apollo.Hooks
                                         _logHeader, pReq.SenderKey);
                 replyData.Status = (int)HttpStatusCode.BadRequest;
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
     }

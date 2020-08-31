@@ -1,213 +1,205 @@
-# MetaverseAPI - Account Related Operations
+# MetaverseAPI - Account Management
 
-Requests that create and manage accounts.
+- [Accounts](#Accounts)
+- [Account Tokens](#AccountTokens)
+- [Domains](#Domains)
 
-- [Users](#Users) - Get information on other users
-- [Friends](#Friends) - Get information on friends
-- [Connections](#Connections) - Get and set connections
-- [Administrative](#Administrative) - administrative account requests
 
-# Users
+## Accounts
 
-## GET /api/v1/users
+## GET /api/v1/accounts
 
-Returns a list of users.
-
-TODO: the list of users returns depends on who the requesting account can "see".
-What is the definition of that?
-
-The GET request url can have queries added which controls the user's returned by
-the request. These queries are:
+Get a list of accounts. The requestor must be logged in and normally it will
+return only the user's 'connections'. If the requestor
+is an administrator and the URL includes the query "asAdmin", all accounts
+are returned (limited by pagination).
 
 - per_page: maximum number of entries to return
 - page: the group of "per_page" to return. For instance, if there are 100 users and `per_page=10` and `page=2`, the request will return entries 11 thru 20.
 - filter: select type of user. A comma separated list of "connections", "friends"
 - status: status of user. A comma separated list of "online"
 - search: TODO: figure this one out
-
-So `GET /api/v1/users?per_page=10&filter=friends&status=online` will return the first 10 users
-who are online friends.
-
-When asking the server about other users, a requestor will only get information about
-other users they have connections with.
-
-The response body is an "applicaton/json" structure that contains an array of user information.
-
+- asAdmin: if logged in account is administrator, list all accounts. Value is optional.
 
 ```
     {
         "status": "success",
         "data": {
-            "users": [
+            "accounts": [
                 {
-                    "username": username,
-                    "connection": bool,
+                    "accountid": "uniqueAccountId",
+                    "username: "username",
+                    "email": "email",
+                    "public_key": "usersPublicKey",
                     "images": {
-                        "Hero": heroImageURL,
-                        "Thumbnail": thumbnailImageURL,
-                        "tiny": tinyImageURL
+                        "hero": stringUrlToImage,
+                        "thumbnail": stringUrlToImage,
+                        "tiny": stringUrlToImage
                     },
                     "location": {
-                        "node_id": stringSessionId,
-                        "root": {
-                            "domain": {
-                                "id":
-                                "network_address": stringHostname,
-                                "network_port": intPortNum,
-                                "ice_server_address": stringHostname,
-                                "name": name,
-                                "default_place_name": name
-                            },
-                            "name": placeName
-                        },
-                        "path": stringXYZXYZW
-                        "online": bool
-                    }
-                },
-                ...
-            ]
-        }
-    }
-```
-
-## GET /api/v1/user/profile
-
-Returns a user's profile.
-
-Not much information is returned and this will probably expand in the future.
-
-If the user making the request has  a valid account token
-(Header "Authorization:" contains a valid token).
-
-The response body is an "applicaton/json" structure that contains an array of user information.
-
-```
-    {
-        "status": "success",
-        "data": {
-            "user": {
-                "username": userName,
-                "xmpp_password": stringDeprecatedPassword,
-                "discourse_api_key": stringDeprecatedAPIKey,
-                "wallet_id": stringWalletId
-            }
-        }
-    }
-```
-
----
-# Friends
-
-## GET /api/v1/user/friends
-
-The response body is an "applicaton/json" structure that contains an array of user information.
-
-If the user making the request has  a valid account token
-(Header "Authorization:" contains a valid token).
-
-```
-    {
-        "status": "success",
-        "data": {
-            "friends": [
-                username,
-                username,
-                ...
-            ]
-        }
-    }
-```
-
-## POST /api/v1/user/friends
-
-Set a user as a friend. The other use must already have a "connection" with this user.
-
-
-```
-    {
-        "username": stringUsername
-    }
-```
-
-```
-    {
-        "status": "success"
-    }
-```
-
-## DELETE /api/v1/user/friends/{username}
-
-```
-    {
-        "status": "success"
-    }
-```
-
----
-# Connections
-
-## POST /api/v1/user/connections
-## DELETE /api/v1/user/connections/{username}
-## GET /api/v1/user/connection_request
-
----
-# Administrative
-
-## PUT /api/v1/user/location
-## GET /api/v1/users/{username}/location
-
-The `username` is percent-encoded for inclusion to the URL.
-
-```
-    {
-        "status": "success",
-        "data": {
-            "location": {   // can be "place"
-                "root": {
-                    "domain": {
-                        "id":
-                        "network_address":
-                        "network_port":
-                        "ice_server_address":
-                        "name":
-                        "default_place_name":
+                        "connected": false,             // whether currently active
+                        "path": "/X,Y,Z/X,Y,Z,W",
+                        "placeid": stringIdOfPlace,
+                        "domainid": stringIdOfDomain,
+                        "availability": stringWhoCanSee // one of "all", "none", "connections", "friends"
                     },
-                    "name": placeName,
+                    "friends": [ "friendName", "friendName", ... ],
+                    "connections": [ "connectionName", "connectionName", ...],
+                    "administator": false,
+                    "when_account_created": "YYYY-MM-DDTHH:MM:SS.MMMZ",
+                    "time_of_last_heartbeat": "YYYY-MM-DDTHH:MM:SS.MMMZ"
                 },
-                "path": stringXYZXYZW
-                "online": bool
+                ...
+            ]
+        }
+    }
+```
+
+## POST /api/v1/account/{accountId}
+
+Update account information.
+
+The requestor must be either the account being modified or an administrator account.
+
+The POST body has the same format as the GET request. If a field is present, then that
+value is modified. Most of the fields cannot be modified, though, and these are ignored.
+
+The fields that can be changed are:
+
+```
+    {
+        "accounts": {
+            "username": newUsername,
+            "email": newEmail,
+            "public_key": newPublicKey,
+            "images": {
+                "hero": newHeroImageUrl,
+                "thumbnail: newThumbnailImageUrl,
+                "tiny": newTinyImageUrl
             }
         }
     }
 ```
 
-## PUT /api/v1/user/public_key
-## GET /api/v1/users/{username}/public_key
+## DELETE /api/v1/account/{accountId}
 
-The `username` is percent-encoded for inclusion to the URL.
+Delete an account.
+
+The requestor must be an administrator.
 
 ## POST /api/v1/users
 
-## PUT /api/v1/user/heartbeat
+Request for creating an account.
 
+The following is sent in the POST request:
 
 ```
     {
-        "location": {
+        "user": {
+            "username": stringUserName,
+            "password": stringPassword,
+            "email": stringEmail
         }
     }
 ```
+
+A successful creation, will return:
+
+```
+    {
+        "status": "success"
+    }
+```
+
+---
+
+## Account Tokens
+
+## GET /api/v1/account/{accountId}/tokens
+
+Get the tokens held by the account. The requesting account must be
+logged in and be either the account identified in "{accountId}" or
+be an administrative account.
 
 ```
     {
         "status": "success",
         "data": {
-            "session_id": stringSessionId
+            "tokens": [
+                {
+                    "tokenid": stringTokenIdentifier,
+                    "token": stringToken,
+                    "refresh_token": stringTokenForRefreshingToken,
+                    "token_creation_time": "YYYY-MM-DDTHH:MM:SS.MMMZ",
+                    "token_expiration_time": "YYYY-MM-DDTHH:MM:SS.MMMZ",
+                    "scope": stringScope    // one of "any", "owner", "domain", "web"
+                },
+                ...
+            ]
         }
     }
 ```
 
+## DELETE /api/v1/account/{accountId}/tokens/{tokenId}
 
-## GET /api/v1/user/locker
-## POST /api/v1/user/locker
+Delete a particular token held by account.
 
+---
+
+## Domains
+
+## GET /api/v1/domains
+
+Get information on the domains the metaverse-server knows about.
+
+The requester must include an account access token in the header of the request.
+
+Query parameters can be included to control the number of returned domains.
+
+- per_page: maximum number of entries to return
+- page: the group of "per_page" to return. For instance, if there are 100 users and `per_page=10` and `page=2`, the request will return entries 11 thru 20.
+
+A request returns an array of domain descriptions:
+
+
+```
+    {
+        "status": "success",
+        "data": {
+            "domains": [
+                {
+                    "domainid": stringDomainId,
+                    "place_name": stringName,
+                    "public_key": stringPublicKey,
+                    "sponser_accountid": stringAccountIdAssociated,
+                    "ice_server": stringAddrIceServerBeingUsed,
+                    "version": stringSoftwareVersion,
+                    "protocol_version": stringProtocolVersion,
+                    "network_addr": stringNetworkAddress,
+                    "networking_mode": stringMode,  // one of "full", ...
+                    "restricted": boolWhetherRestricted,
+                    "num_users": intCurrentLoggedInUsers,
+                    "anon_users": intCurrentAnonomousUsers,
+                    "total_users": intTotalUsers,
+                    "capacity": intMaxCapacity,
+                    "description": stringDescription,
+                    "maturity": stringMaturity,
+                    "restriction": string,
+                    "hosts": [],
+                    "tags": [ stringTag, stringTag, ... ],
+                    "time_of_last_heartbeat": "YYYY-MM-DDTHH:MM:SS.MMMZ",
+                    "last_sender_key": stringHostPortSourceOfLastMessage,
+                    "addr_of_first_contact": stringHostPortOfDomainEntryCreation,
+                    "when_domain_entry_created": "YYYY-MM-DDTHH:MM:SS.MMMZ"
+                },
+                ...
+            ]
+        }
+    }
+```
+
+## DELETE /api/v1/domain/%
+
+Delete the specified domain.
+
+The requestor must supply an account token of an administrator.

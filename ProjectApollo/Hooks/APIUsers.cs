@@ -14,15 +14,18 @@
 
 using System;
 using System.Collections.Generic;
-using System.Net;
 using System.IO;
+using System.Linq;
+using System.Net;
+using System.Text.RegularExpressions;
 using System.Web;
 
 using Project_Apollo.Entities;
 using Project_Apollo.Registry;
+using Project_Apollo.Configuration;
 
 using Newtonsoft.Json.Linq;
-using System.Linq;
+using System.Text;
 
 namespace Project_Apollo.Hooks
 {
@@ -77,7 +80,7 @@ namespace Project_Apollo.Hooks
                 {
                     // Who is this clown?
                     replyData.Status = (int)HttpStatusCode.Unauthorized;
-                    respBody.RespondFailure();
+                    respBody.RespondFailure("Unauthorized");
                     Context.Log.Error("{0} Heartbeat from account with non-matching token. Sender={1}",
                                         _logHeader, pReq.SenderKey);
                 }
@@ -93,7 +96,7 @@ namespace Project_Apollo.Hooks
                 };
             }
 
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
         // == GET /api/v1/users ======================================================e
@@ -110,6 +113,7 @@ namespace Project_Apollo.Hooks
         public struct bodyUser
         {
             public string username;
+            public string accountid;
             public string connection;
             public UserImages images;
             // the code seems to allow "location", "place", or "domain"
@@ -142,21 +146,22 @@ namespace Project_Apollo.Hooks
             RESTReplyData replyData = new RESTReplyData();  // The HTTP response info
             ResponseBody respBody = new ResponseBody();     // The request's "data" response info
 
-            PaginationInfo pagination = new PaginationInfo(pReq);
-            AccountFilterInfo acctFilter = new AccountFilterInfo(pReq);
-
             SessionEntity aSession = Sessions.Instance.GetSession(pReq.SenderKey);
+
+            PaginationInfo pagination = new PaginationInfo(pReq);
 
             if (Accounts.Instance.TryGetAccountWithAuthToken(pReq.AuthToken, out AccountEntity aAccount))
             {
+                AccountFilterInfo acctFilter = new AccountFilterInfo(pReq);
                 AccountScopeFilter scopeFilter = new AccountScopeFilter(pReq, aAccount);
 
                 respBody.Data = new bodyUsersReply() {
-                    users = pagination.Filter<AccountEntity>(scopeFilter.Filter(acctFilter.Filter(aAccount))).Select(acct =>
+                    users = Accounts.Instance.Enumerate(pagination, acctFilter, scopeFilter).Select (acct =>
                     {
                         bodyUser ret = new bodyUser()
                         {
                             username = acct.Username,
+                            accountid = acct.AccountID,
                             images = acct.Images,
                         };
                         ret.location = BuildLocationInfo(acct);
@@ -168,7 +173,7 @@ namespace Project_Apollo.Hooks
             // Pagination fills the top level of the reply with paging info
             pagination.AddReplyFields(respBody);
 
-            replyData.Body = respBody;  // serializes JSON
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -186,11 +191,8 @@ namespace Project_Apollo.Hooks
 
             if (Sessions.Instance.ShouldBeThrottled(pReq.SenderKey, Sessions.Op.ACCOUNT_CREATE))
             {
-                respBody.RespondFailure();
-                respBody.Data = new
-                {
-                    operation = "throttled"
-                };
+                respBody.RespondFailure("Throttled");
+                respBody.ErrorData("error", "throttled");
             }
             else
             {
@@ -202,24 +204,38 @@ namespace Project_Apollo.Hooks
                     string userPassword = requestData.user["password"];
                     string userEmail = requestData.user["email"];
 
-                    Context.Log.Debug("{0} Creating account {1}/{2}", _logHeader, userName, userEmail);
-
-                    AccountEntity newAcct = Accounts.Instance.CreateAccount(userName, userPassword, userEmail);
-                    if (newAcct == null)
+                    if (CheckUsernameFormat(userName))
                     {
-                        respBody.RespondFailure();
-                        respBody.Data = new Dictionary<string, string>() {
-                            { "username", "already exists" }
-                        };
-                        Context.Log.Debug("{0} Failed acct creation. Username already exists. User={1}",
-                                        _logHeader, userName);
+                        if (CheckEmailFormat(userEmail))
+                        {
+                            Context.Log.Debug("{0} Creating account {1}/{2}", _logHeader, userName, userEmail);
+
+                            AccountEntity newAcct = Accounts.Instance.CreateAccount(userName, userPassword, userEmail);
+                            if (newAcct == null)
+                            {
+                                respBody.RespondFailure("Username already exists");
+                                respBody.ErrorData("username", "already exists");   // legacy HiFi compatibility
+                                Context.Log.Debug("{0} Failed acct creation. Username already exists. User={1}",
+                                                _logHeader, userName);
+                            }
+                            else
+                            {
+                                // Successful account creation
+                                newAcct.IPAddrOfCreator = pReq.SenderKey;
+                                newAcct.Updated();
+                                Context.Log.Debug("{0} Successful acct creation. User={1}", _logHeader, userName);
+                            }
+                        }
+                        else
+                        {
+                            respBody.RespondFailure("Bad format for email");
+                            respBody.ErrorData("error", "bad format for email");
+                        }
                     }
                     else
                     {
-                        // Successful account creation
-                        newAcct.IPAddrOfCreator = pReq.SenderKey;
-                        newAcct.Updated();
-                        Context.Log.Debug("{0} Successful acct creation. User={1}", _logHeader, userName);
+                        respBody.RespondFailure("Bad format for username");
+                        respBody.ErrorData("error", "bad format for username");
                     }
                 }
                 catch (Exception e)
@@ -229,9 +245,38 @@ namespace Project_Apollo.Hooks
                 }
             }
 
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
 
+        }
+
+        private bool CheckUsernameFormat(string pUsername)
+        {
+            try
+            {
+                return Regex.IsMatch(pUsername, Context.Params.P<string>(AppParams.P_ACCOUNT_USERNAME_FORMAT),
+                                RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(20));
+            }
+            catch (Exception e)
+            {
+                Context.Log.Error("{0} CheckUsernameFormat: exception checking username {1}: {2}",
+                                _logHeader, pUsername, e);
+            }
+            return false;
+        }
+        private bool CheckEmailFormat(string pEmail)
+        {
+            try
+            {
+                return Regex.IsMatch(pEmail, Context.Params.P<string>(AppParams.P_ACCOUNT_EMAIL_FORMAT),
+                                RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(20));
+            }
+            catch (Exception e)
+            {
+                Context.Log.Error("{0} CheckUsernameFormat: exception checking email {1}: {2}",
+                                _logHeader, pEmail, e);
+            }
+            return false;
         }
 
         // = POST /api/v1/user/locker ==================================================
@@ -249,9 +294,9 @@ namespace Project_Apollo.Hooks
             else
             {
                 Context.Log.Error("{0} POST user/locker requested without auth token. Token={1}", _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -269,9 +314,9 @@ namespace Project_Apollo.Hooks
             else
             {
                 Context.Log.Error("{0} GET user/locker requested without auth token. Token={1}", _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -297,9 +342,9 @@ namespace Project_Apollo.Hooks
             {
                 Context.Log.Error("{0} GET user/friends requested without auth token. Token={1}",
                                         _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
         // = POST /api/v1/user/friends ==================================================
@@ -330,16 +375,16 @@ namespace Project_Apollo.Hooks
                 {
                     Context.Log.Error("{0} user_friends_post: attempt to add friend that does not exist. Requestor={1}, friend={2}",
                                                 _logHeader, aAccount.Username, friendname);
-                    respBody.RespondFailure();
+                    respBody.RespondFailure("Attempt to add friend that does not exist");
                 }
             }
             else
             {
                 Context.Log.Error("{0} GET user/friends requested without auth token. Token={1}",
                                         _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
         // = DELETE /api/v1/user/friends/% ==================================================
@@ -360,17 +405,21 @@ namespace Project_Apollo.Hooks
             {
                 Context.Log.Error("{0} DELETE user/friends requested without auth token. Token={1}",
                                         _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
         // = POST /api/v1/user/connection_request ==================================================
         public struct bodyUserConnectionRequestPost
         {
-            string node_id;
-            string proposed_node_id;
+            public bodyUserConnectionRequestInfo user_connection_request;
+        }
+        public struct bodyUserConnectionRequestInfo
+        {
+            public string node_id;              // the sessionUUID of the requestor
+            public string proposed_node_id;     // the sessionUUID of the other avatar
         }
         [APIPath("/api/v1/user/connection_request", "POST", true)]
         public RESTReplyData user_connections_request_post(RESTRequestData pReq, List<string> pArgs)
@@ -380,59 +429,157 @@ namespace Project_Apollo.Hooks
 
             if (Accounts.Instance.TryGetAccountWithAuthToken(pReq.AuthToken, out AccountEntity aAccount))
             {
-                // Not implemented
-                respBody.RespondFailure();
-                Context.Log.Debug("{0} user/connection_request: user={1}, body={2}",
-                                _logHeader, aAccount.Username, pReq.RequestBody);
+                bodyUserConnectionRequestPost request = pReq.RequestBodyObject<bodyUserConnectionRequestPost>();
+                // The script looks for two types of 'connection' responses.
+                //    If is sees data.connection == "pending", it trys again and eventually times out
+                //    If data.connection has an object, it uses 'new_connection' and 'username'
+
+                // Connection handles are the in-world nodeId's
+                string thisNode = request.user_connection_request.node_id;
+                string otherNode = request.user_connection_request.proposed_node_id;
+
+                // BEGIN sanity check DEBUG DEBUG
+                {
+                    // Connections use node id's to identify the two avatars, I guess because, the
+                    //    world does not have access to the account identity.
+                    // This debugging code prints out whether the passed nodeIds match the loction
+                    //    nodeIds that we have to verify that the connection nodeIds are really the
+                    //    same ones as passed in the location.
+                    // All this debugging output can go away once nodeId usage is understood.
+                    Context.Log.Debug("{0} connection_request: request from account '{1}' node={2}, proposed={3}",
+                                        _logHeader, aAccount.Username, thisNode, otherNode);
+                    if (aAccount.Location != null)
+                    {
+                        if (aAccount.Location.NodeID == thisNode)
+                        {
+                            Context.Log.Debug("{0} connection_request: request from account '{1}' and Location.NodeId matches main node",
+                                                _logHeader, aAccount.Username);
+                        }
+                        else
+                        {
+                            if (aAccount.Location.NodeID == otherNode)
+                            {
+                                Context.Log.Debug("{0} connection_request: request from account '{1}' and Location.NodeId matches proposed node",
+                                                _logHeader, aAccount.Username);
+                            }
+                            else
+                            {
+                                Context.Log.Debug("{0} connection_request: request from account '{1}' and Location.NodeId does not match either nodes",
+                                                _logHeader, aAccount.Username);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Context.Log.Debug("{0} connection_request: request from account '{1}' and no location info",
+                                                _logHeader, aAccount.Username);
+                    }
+                }
+                // END sanity check DEBUG DEBUG
+                try
+                {
+                    // This returns all the RequestConnection's that have my ID in them
+                    RequestConnection previousAsk = RequestConnection.GetNodeRequests(thisNode)
+                        // Find the ones that have me and the other requestor
+                        .Where(req =>
+                        {
+                            return (req.Body.node_id == thisNode && req.Body.proposed_node_id == otherNode)
+                                || (req.Body.node_id == otherNode && req.Body.proposed_node_id == thisNode);
+                        // Pick the one (there should be only one)
+                        }).FirstOrDefault();
+
+                    if (previousAsk != null)
+                    {
+                        Context.Log.Debug("{0} connection_request: existing request found", _logHeader);
+                        // We have a pending connection request for this person
+                        // Mark myself as accepting
+                        if (previousAsk.Body.node_id == thisNode)
+                        {
+                            if (!previousAsk.Body.node_accepted)
+                            {
+                                previousAsk.Body.node_accepted = true;
+                                previousAsk.Updated();
+                            }
+                        }
+                        else
+                        {
+                            if (!previousAsk.Body.proposed_node_accepted)
+                            {
+                                previousAsk.Body.proposed_node_accepted = true;
+                                previousAsk.Updated();
+                            }
+                            // I'm in the 'proposed node' position.
+                            // Straighten out the node variables for simplier logic after this
+                            var tmp = otherNode;
+                            otherNode = thisNode;
+                            thisNode = tmp;     // after this, "thisNode" is always this account
+                            Context.Log.Debug("{0} connection_request: found request was from other account", _logHeader);
+                        }
+                        // If both accepted, the connection is complete
+                        if (previousAsk.Body.node_accepted && previousAsk.Body.proposed_node_accepted)
+                        {
+                            if (Accounts.Instance.TryGetAccountWithNodeId(otherNode, out AccountEntity oOtherAccount))
+                            {
+                                aAccount.AddConnection(oOtherAccount);
+                                aAccount.Updated();
+                                oOtherAccount.AddConnection(aAccount);
+                                oOtherAccount.Updated();
+                                respBody.Data = new
+                                {
+                                    connection = new
+                                    {
+                                        new_connection = true,      // says whether a new or pre-existing connection
+                                        username = oOtherAccount.Username
+                                    }
+                                };
+                            }
+                            else
+                            {
+                                // Can't find the other account... shouldn't happen
+                                respBody.RespondFailure("Both agreed but cannot find other account entity");
+                            }
+                        }
+                        else
+                        {
+                            // Both haven't accepted so tell the requestor that the request is pending
+                            respBody.Data = new Dictionary<string, string>()
+                            {
+                                {  "connection", "pending" }
+                            };
+                        }
+                    }
+                    else
+                    {
+                        // There was no previous ask so create the request.
+                        Context.Log.Debug("{0} connection_request: creating connection request from '{1}",
+                                        _logHeader, aAccount.Username);
+                        RequestConnection newReq = new RequestConnection();
+                        newReq.Body.node_id = thisNode;
+                        newReq.Body.requestor_accountId = aAccount.AccountID;
+                        newReq.Body.proposed_node_id = otherNode;
+                        newReq.Body.node_accepted = true;
+                        newReq.ExpireIn(TimeSpan.FromSeconds(Context.Params.P<int>(AppParams.P_CONNECTION_REQUEST_SECONDS)));
+                        newReq.AddAndUpdate();
+
+                        // Both haven't accepted so tell the requestor that the request is pending
+                        respBody.Data = new Dictionary<string, string>()
+                        {
+                            {  "connection", "pending" }
+                        };
+                    }
+                }
+                catch
+                {
+                }
             }
             else
             {
                 Context.Log.Error("{0} POST user/connection_request for unauthorized user. Token={1}",
                                         _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
-            return replyData;
-        }
-        // = POST /api/v1/user/connections ==================================================
-        public struct bodyUserConnectionsPost
-        {
-            public string username;
-        }
-        [APIPath("/api/v1/user/connections", "POST", true)]
-        public RESTReplyData user_connections_post(RESTRequestData pReq, List<string> pArgs)
-        {
-            RESTReplyData replyData = new RESTReplyData();  // The HTTP response info
-            ResponseBody respBody = new ResponseBody();
 
-            if (Accounts.Instance.TryGetAccountWithAuthToken(pReq.AuthToken, out AccountEntity aAccount))
-            {
-                // TODO: Should put something
-                bodyUserConnectionsPost body = pReq.RequestBodyObject<bodyUserConnectionsPost>();
-                string connectionname = body.username;
-                Context.Log.Debug("{0} user_connections_post: adding connection {1} for user {2}",
-                                _logHeader, body.username, aAccount.Username);
-                if (Accounts.Instance.TryGetAccountWithUsername(connectionname, out AccountEntity _))
-                {
-                    if (!aAccount.Connections.Contains(connectionname))
-                    {
-                        aAccount.Connections.Add(connectionname);
-                    }
-                }
-                else
-                {
-                    Context.Log.Error("{0} user_friends_post: attempt to add friend that does not exist. Requestor={1}, friend={2}",
-                                                _logHeader, aAccount.Username, connectionname);
-                    respBody.RespondFailure();
-                }
-            }
-            else
-            {
-                Context.Log.Error("{0} GET user/connections requested without auth token. Token={1}",
-                                        _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
-            }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
         // = DELETE /api/v1/user/connections/% ==================================================
@@ -453,9 +600,9 @@ namespace Project_Apollo.Hooks
             {
                 Context.Log.Error("{0} DELETE user/connections requested without auth token. Token={1}",
                                         _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -472,18 +619,18 @@ namespace Project_Apollo.Hooks
                 {
                     GetAccountLocationIfSpecified(aAccount, pReq);
                 }
-                catch
+                catch (Exception e)
                 {
-                    Context.Log.Error("{0} PUT user/location Failed body parsing. Acct={1}",
-                                        _logHeader, aAccount.AccountID);
-                    respBody.RespondFailure();
+                    Context.Log.Error("{0} PUT user/location Failed body parsing. Acct={1}: {2}",
+                                        _logHeader, aAccount.AccountID, e);
+                    respBody.RespondFailure("failed location parsing", e.ToString());
                 }
             }
             else
             {
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
         private void GetAccountLocationIfSpecified(AccountEntity pAccount, RESTRequestData pReq) {
@@ -545,20 +692,20 @@ namespace Project_Apollo.Hooks
                     }
                     else
                     {
-                        respBody.RespondFailure();
+                        respBody.RespondFailure("No such username");
                     }
                 }
                 else
                 {
-                    respBody.RespondFailure();
+                    respBody.RespondFailure("Target account not included in URL");
                 }
             }
             else
             {
                 Context.Log.Error("{0} GET user/location requested without auth token. Token={1}", _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
         private bodyLocationInfo BuildLocationInfo(AccountEntity pAccount, SessionEntity pSession = null)
@@ -626,6 +773,7 @@ namespace Project_Apollo.Hooks
         public struct bodyUserProfileInfo
         {
             public string username;
+            public string accountid;
             public string xmpp_password;
             public string discourse_api_key;
             public string wallet_id;
@@ -643,6 +791,7 @@ namespace Project_Apollo.Hooks
                     user = new bodyUserProfileInfo()
                     {
                         username = aAccount.Username,
+                        accountid = aAccount.AccountID,
                         xmpp_password = aAccount.xmpp_password,
                         discourse_api_key = aAccount.discourse_api_key,
                         wallet_id = aAccount.wallet_id
@@ -652,9 +801,9 @@ namespace Project_Apollo.Hooks
             else
             {
                 Context.Log.Error("{0} GET user/profile requested without auth token. Token={1}", _logHeader, pReq.AuthToken);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             // Context.Log.Debug("{0} GET user/profile. Response={1}", _logHeader, replyData.Body);
             return replyData;
         }
@@ -709,6 +858,7 @@ namespace Project_Apollo.Hooks
                     {
                         Context.Log.Error("{0} PUT user/set_public_key requested without APIKey. APIKey={1}",
                                                 _logHeader, includedAPIKey);
+                        respBody.RespondFailure("APIkey does not work");
                         replyData.Status = (int)HttpStatusCode.Unauthorized;
                     }
                 }
@@ -722,6 +872,7 @@ namespace Project_Apollo.Hooks
                     {
                         Context.Log.Error("{0} PUT user/set_public_key requested but could not find acct. Token={1}",
                                                 _logHeader, pReq.AuthToken);
+                        respBody.RespondFailure("AuthToken unauthorized");
                         replyData.Status = (int)HttpStatusCode.Unauthorized;
                     }
                 }
@@ -729,10 +880,10 @@ namespace Project_Apollo.Hooks
             else
             {
                 Context.Log.Error("{0} PUT user/set_public_key failure parsing", _logHeader);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Multi-part body failed parsing");
             }
 
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
@@ -740,6 +891,8 @@ namespace Project_Apollo.Hooks
         public struct bodyUserPublicKeyReply
         {
             public string public_key;
+            public string username;
+            public string accountid;
         }
         [APIPath("/api/v1/users/%/public_key", "GET", true)]
         public RESTReplyData get_public_key(RESTRequestData pReq, List<string> pArgs)
@@ -752,17 +905,19 @@ namespace Project_Apollo.Hooks
             {
                 respBody.Data = new bodyUserPublicKeyReply()
                 {
-                    public_key = aAccount.Public_Key
+                    public_key = aAccount.Public_Key,
+                    username = aAccount.Username,
+                    accountid = aAccount.AccountID
                 };
             }
             else
             {
                 Context.Log.Error("{0} GET fetch of user public key for unknown acct. SenderKey: {1}, Username: {2}",
                                         _logHeader, pReq.SenderKey, username);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unknown username");
             }
 
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
     }

@@ -36,6 +36,9 @@ namespace Project_Apollo.Hooks
             public string refresh_token;
             public string scope;
             public Int64 created_at;
+            public string account_id;
+            public string account_name;
+            public string account_type;
         }
         [APIPath("/oauth/token", "POST", true)]
         public RESTReplyData user_login(RESTRequestData pReq, List<string> pArgs)
@@ -64,14 +67,17 @@ namespace Project_Apollo.Hooks
                         // string userPassword = reqArgs["oculus_id"];
 
                         AuthTokenInfo.ScopeCode userScope = AuthTokenInfo.ScopeCode.owner;
-                        try
+                        if (reqArgs.ContainsKey("scope"))
                         {
-                            userScope = Enum.Parse<AuthTokenInfo.ScopeCode>(reqArgs["scope"] ?? "owner");
-                        }
-                        catch
-                        {
-                            Context.Log.Error("{0} /oauth/token: unknown scope code: {1}", _logHeader, reqArgs["scope"]);
-                            userScope = AuthTokenInfo.ScopeCode.owner;
+                            try
+                            {
+                                userScope = Enum.Parse<AuthTokenInfo.ScopeCode>(reqArgs["scope"] ?? "owner");
+                            }
+                            catch
+                            {
+                                Context.Log.Error("{0} /oauth/token: unknown scope code: {1}", _logHeader, reqArgs["scope"]);
+                                userScope = AuthTokenInfo.ScopeCode.owner;
+                            }
                         }
 
                         // Context.Log.Debug("{0} Get access token for {1} with password", _logHeader, userName);
@@ -85,13 +91,13 @@ namespace Project_Apollo.Hooks
                                 AuthTokenInfo authInfo = aAccount.CreateAccessToken(userScope, pReq.SenderKey + ";" + userName);
 
                                 // The response does not follow the usual {status: , data: } form.
-                                replyData.Body = OAuthTokenResponseBody(authInfo);
+                                replyData.SetBody( OAuthTokenResponseBody(aAccount, authInfo) );
                             }
                             else
                             {
                                 Context.Log.Debug("{0} Login failed for user {1}", _logHeader, userName);
                                 // The password doesn't work.
-                                replyData.Body = OAuthResponseError("Login failed");
+                                replyData.SetBody( OAuthResponseError("Login failed") );
                                 replyData.Status = (int)HttpStatusCode.Unauthorized;
                             }
                         }
@@ -99,7 +105,8 @@ namespace Project_Apollo.Hooks
                         {
                             Context.Log.Error("{0} Attempt to get token for unknown user {1}. Sender={2}",
                                             _logHeader, userName, pReq.SenderKey);
-                            replyData.Body = OAuthResponseError("Unknown user");
+                            replyData.SetBody( OAuthResponseError("Unknown user") );
+                            replyData.Status = (int)HttpStatusCode.BadRequest;
                         }
                         break;
                     }
@@ -112,7 +119,7 @@ namespace Project_Apollo.Hooks
 
                         Context.Log.Error("{0} Attempt to login with 'authorization_code'. clientID={1}",
                                             _logHeader, clientID);
-                        replyData.Body = OAuthResponseError("Cannot process 'authorization_code'");
+                        replyData.SetBody( OAuthResponseError("Cannot process 'authorization_code'") );
                         replyData.Status = (int)HttpStatusCode.Unauthorized;
                         break;
                     }
@@ -127,25 +134,27 @@ namespace Project_Apollo.Hooks
                             AuthTokenInfo refreshToken = aAccount.RefreshAccessToken(refreshingToken);
                             if (refreshToken != null)
                             {
-                                replyData.Body = OAuthTokenResponseBody(refreshToken);
+                                replyData.SetBody( OAuthTokenResponseBody(aAccount, refreshToken) );
                             }
                             else
                             {
-                                replyData.Body = OAuthResponseError("Cannot refresh");
+                                replyData.SetBody( OAuthResponseError("Cannot refresh") );
+                                replyData.Status = (int)HttpStatusCode.BadRequest;
                             }
 
                         }
                         else
                         {
                             Context.Log.Error("{0} Attempt to refresh token for not logged in user", _logHeader);
-                            replyData.Body = OAuthResponseError("Unknown user");
+                            replyData.SetBody( OAuthResponseError("Unknown user") );
+                            replyData.Status = (int)HttpStatusCode.BadRequest;
                         }
                         break;
                     }
                 default:
                     Context.Log.Error("{0} Attempt to login with unknown grant type. Type={1}",
                                         _logHeader, accessGrantType);
-                    replyData.Body = OAuthResponseError("Unknown grant type: " + accessGrantType);
+                    replyData.SetBody( OAuthResponseError("Unknown grant type: " + accessGrantType) );
                     replyData.Status = (int)HttpStatusCode.Unauthorized;
                     break;
             }
@@ -162,7 +171,7 @@ namespace Project_Apollo.Hooks
                 { "error", pMsg }
             });
         }
-        private string OAuthTokenResponseBody(AuthTokenInfo pTokenInfo)
+        private string OAuthTokenResponseBody(AccountEntity pAccount, AuthTokenInfo pTokenInfo)
         {
             return JsonConvert.SerializeObject(new bodyLoginReply()
             {
@@ -171,7 +180,10 @@ namespace Project_Apollo.Hooks
                 expires_in = (int)(pTokenInfo.TokenExpirationTime - pTokenInfo.TokenCreationTime).TotalSeconds,
                 refresh_token = pTokenInfo.RefreshToken,
                 scope = pTokenInfo.Scope.ToString(),
-                created_at = ((DateTimeOffset)pTokenInfo.TokenCreationTime).ToUnixTimeSeconds()
+                created_at = ((DateTimeOffset)pTokenInfo.TokenCreationTime).ToUnixTimeSeconds(),
+                account_id = pAccount.AccountID,
+                account_name = pAccount.Username,
+                account_type = pAccount.GetAccountType()
             });
         }
 
@@ -197,7 +209,7 @@ namespace Project_Apollo.Hooks
                         // The domain/account association is permenant... expiration is far from now
                         token.TokenExpirationTime = new DateTime(2999, 12, 31);
 
-                        replyData.Body = $"<center><h2>Your domain's access token is: {token.Token}</h2></center>";
+                        replyData.SetBody( $"<center><h2>Your domain's access token is: {token.Token}</h2></center>" );
                         replyData.MIMEType = "text/html";
                     }
                     else
@@ -226,7 +238,7 @@ namespace Project_Apollo.Hooks
 
             if (Sessions.Instance.ShouldBeThrottled(pReq.SenderKey, Sessions.Op.TOKEN_CREATE))
             {
-                respBody.RespondFailure();
+                respBody.RespondFailure("Throttled");
                 respBody.Data = new
                 {
                     operation = "throttled"
@@ -262,21 +274,23 @@ namespace Project_Apollo.Hooks
                             token_id = token.TokenId,
                             refresh_token = token.RefreshToken,
                             token_expiration_seconds = (int)(token.TokenExpirationTime - token.TokenCreationTime).TotalSeconds,
-                            account_name = oAccount.Username
+                            account_name = oAccount.Username,
+                            account_type = oAccount.GetAccountType(),
+                            account_id = oAccount.AccountID
                         };
                     }
                     else
                     {
-                        respBody.RespondFailure();
+                        respBody.RespondFailure("Token could not be generated. Bad scope?");
                     }
                 }
                 else
                 {
                     // Not a known account.
-                    respBody.RespondFailure();
+                    respBody.RespondFailure("Unknown requesting account");
                 }
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
     }

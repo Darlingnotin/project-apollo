@@ -19,6 +19,7 @@ using System.Reflection;
 using System.IO;
 using Newtonsoft.Json;
 using Project_Apollo.Configuration;
+using Project_Apollo.Hooks;
 
 namespace Project_Apollo.Registry
 {
@@ -89,8 +90,8 @@ namespace Project_Apollo.Registry
                                             _path.AssignedMethod = mi;
                                             foundPaths.Add(_path);
 
-                                            Context.Log.Debug("{0} Discovered: {1}; {2}",
-                                                        _logHeader, _path.PathLike, mi.Name);
+                                            Context.Log.Debug("{0} Discovered: {1} {2}; {3}",
+                                                        _logHeader, _path.HTTPMethod, _path.PathLike, mi.Name);
                                         }
                                     }
                                 }
@@ -219,17 +220,12 @@ namespace Project_Apollo.Registry
             if (_replyData == null)
             {
                 // The request does not match any path, return error
-                _replyData = new RESTReplyData
-                {
-                    Status = 200
-                };
-                Dictionary<string, string> notFoundDefault = new Dictionary<string, string>
-                {
-                    { "status", "not_found" },
-                    { "data", "Needs more water!" }
-                };
-                string notFoundDef = JsonConvert.SerializeObject(notFoundDefault);
-                _replyData.Body = notFoundDef;
+                _replyData = new RESTReplyData();
+                ResponseBody respBody = new ResponseBody();
+
+                respBody.RespondFailure("operation not found");
+
+                _replyData.SetBody(respBody, pReq);
             }
 
             return _replyData;

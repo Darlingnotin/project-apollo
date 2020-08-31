@@ -41,7 +41,7 @@ namespace Project_Apollo.Hooks
             {
                 public_key = Context.Params.P<string>(AppParams.P_COMMERCE_MARKETPLACEKEY)
             };
-            replyData.Body = respBody;  // serializes JSON
+            replyData.SetBody(respBody, pReq);
 
             return replyData;
         }

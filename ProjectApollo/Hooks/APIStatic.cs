@@ -75,7 +75,7 @@ namespace Project_Apollo.Hooks
             {
                 if (File.Exists(filename))
                 {
-                    replyData.Body = File.ReadAllText(filename);
+                    replyData.SetBody( File.ReadAllText(filename) );
                     string exten = Path.GetExtension(filename);
                     var mimeType = exten switch
                     {

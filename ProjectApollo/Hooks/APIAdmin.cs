@@ -38,13 +38,40 @@ namespace Project_Apollo.Hooks
             public string username;
             public string email;
             public string public_key;
-            public UserImages images;
-            public LocationInfo location;
+            public object images;
+            public object location;
             public string[] friends;
             public string[] connections;
             public bool administrator;
             public string when_account_created;
             public string time_of_last_heartbeat;
+
+            public bodyAccountInfo(AccountEntity pAcct)
+            {
+                accountid = pAcct.AccountID;
+                username = pAcct.Username;
+                email = pAcct.Email;
+                public_key = pAcct.Public_Key;
+                images = new
+                {
+                    hero = pAcct.Images.Hero,
+                    thumbnail = pAcct.Images.Thumbnail,
+                    tiny = pAcct.Images.Tiny
+                };
+                location = new 
+                {
+                    connected = pAcct.Location.Connected.ToString(),
+                    path = pAcct.Location.Path,
+                    placeid = pAcct.Location.PlaceID,
+                    domainid = pAcct.Location.DomainID,
+                    availability = pAcct.Location.Availability.ToString()
+                };
+                friends = pAcct.Friends.ToArray();
+                connections = pAcct.Connections.ToArray();
+                administrator = pAcct.Administrator;
+                when_account_created = XmlConvert.ToString(pAcct.WhenAccountCreated, XmlDateTimeSerializationMode.Utc);
+                time_of_last_heartbeat = XmlConvert.ToString(pAcct.TimeOfLastHeartbeat, XmlDateTimeSerializationMode.Utc);
+            }
         }
         /// <summary>
         /// API request to return detailed account information
@@ -58,71 +85,111 @@ namespace Project_Apollo.Hooks
             RESTReplyData replyData = new RESTReplyData();  // The HTTP response info
             ResponseBody respBody = new ResponseBody();
 
-            PaginationInfo pagination = new PaginationInfo(pReq);
-            AccountFilterInfo acctFilter = new AccountFilterInfo(pReq);
-
             if (Accounts.Instance.TryGetAccountWithAuthToken(pReq.AuthToken, out AccountEntity aAccount))
             {
+                PaginationInfo pagination = new PaginationInfo(pReq);
+                AccountFilterInfo acctFilter = new AccountFilterInfo(pReq);
                 AccountScopeFilter scopeFilter = new AccountScopeFilter(pReq, aAccount);
 
                 respBody.Data = new bodyAccountsReply() {
-                    accounts = pagination.Filter<AccountEntity>(scopeFilter.Filter(acctFilter.Filter(aAccount))).Select(acct =>
+                    accounts = Accounts.Instance.Enumerate(pagination, acctFilter, scopeFilter).Select( acct =>
                     {
-                        return new bodyAccountInfo()
-                        {
-                            accountid = acct.AccountID,
-                            username = acct.Username,
-                            email = acct.Email,
-                            public_key = acct.Public_Key,
-                            images = acct.Images,
-                            location = acct.Location,
-                            friends = acct.Friends.ToArray(),
-                            connections = acct.Connections.ToArray(),
-                            administrator = acct.Administrator,
-                            when_account_created = XmlConvert.ToString(acct.WhenAccountCreated, XmlDateTimeSerializationMode.Utc),
-                            time_of_last_heartbeat = XmlConvert.ToString(acct.TimeOfLastHeartbeat, XmlDateTimeSerializationMode.Utc)
-                        };
+                        return new bodyAccountInfo(acct);
                     }).ToArray()
                 };
             }
             else
             {
                 Context.Log.Error("{0} GET accounts requested with bad auth", _logHeader);
-                respBody.RespondFailure();
+                respBody.RespondFailure("Bad authorization");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 
         [APIPath("/api/v1/account/%", "POST", true)]
         public RESTReplyData admin_post_accounts(RESTRequestData pReq, List<string> pArgs)
         {
-            return APITargetedOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
+            return APITargetedAccountOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
             {
+                try
+                {
+                    JObject body = pReq.RequestBodyJSON();
+                    if (body.ContainsKey("accounts"))
+                    {
+                        JObject acctInfo = (JObject)body["accounts"];
+                        Tools.SetIfSpecified<string>(acctInfo, "username", ref pTargetAcct.Username);
+                        Tools.SetIfSpecified<string>(acctInfo, "email", ref pTargetAcct.Email);
+                        Tools.SetIfSpecified<string>(acctInfo, "public_key", ref pTargetAcct.Public_Key);
+                        if (acctInfo.ContainsKey("images"))
+                        {
+                            JObject imageInfo = (JObject)acctInfo["images"];
+                            if (pTargetAcct.Images == null)
+                            {
+                                pTargetAcct.Images = new UserImages();
+                            }
+                            Tools.SetIfSpecified<string>(imageInfo, "hero", ref pTargetAcct.Images.Hero);
+                            Tools.SetIfSpecified<string>(imageInfo, "thumbnail", ref pTargetAcct.Images.Thumbnail);
+                            Tools.SetIfSpecified<string>(imageInfo, "tiny", ref pTargetAcct.Images.Tiny);
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    Context.Log.Error("{0} POST /api/v1/account/%: exception parsing body '{1}' from {2} account {3}",
+                                _logHeader, pReq.RequestBody, pReq.SenderKey, pSrcAcct.Username);
+                    pRespBody.RespondFailure("Exception parsing message body", e.ToString());
+                    pRespBody.ErrorData("error", "parse body failure");
+                }
             });
         }
 
         [APIPath("/api/v1/account/%", "DELETE", true)]
         public RESTReplyData admin_delete_accounts(RESTRequestData pReq, List<string> pArgs)
         {
-            return APITargetedOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
+            return APITargetedAccountOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
             {
+                Context.Log.Error("{0} UNIMPLIMENTED: DELETE /api/v1/account/%. From={1}",
+                                _logHeader, pReq.SenderKey);
+                pRespBody.RespondFailure("Not implemented");
             });
         }
 
         public struct bodyTokensReply
         {
-            public AuthTokenInfo[] tokens;
+            public bodyTokenInfo[] tokens;
+        }
+        public struct bodyTokenInfo
+        {
+            public string tokenid;
+            public string token;
+            public string refresh_token;
+            public string token_creation_time;
+            public string token_expiration_time;
+            public string scope;
+
+            public bodyTokenInfo(AuthTokenInfo pToken)
+            {
+                tokenid = pToken.TokenId;
+                token = pToken.Token;
+                refresh_token = pToken.RefreshToken;
+                token_creation_time = XmlConvert.ToString(pToken.TokenCreationTime, XmlDateTimeSerializationMode.Utc);
+                token_expiration_time = XmlConvert.ToString(pToken.TokenExpirationTime, XmlDateTimeSerializationMode.Utc);
+                scope = pToken.Scope.ToString();
+            }
         }
         [APIPath("/api/v1/account/%/tokens", "GET", true)]
         public RESTReplyData account_get_tokens(RESTRequestData pReq, List<string> pArgs)
         {
-            return APITargetedOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
+            return APITargetedAccountOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
             {
                 PaginationInfo pagination = new PaginationInfo(pReq);
                 pRespBody.Data = new bodyTokensReply()
                 {
-                    tokens = pagination.Filter<AuthTokenInfo>(pTargetAcct.AuthTokens.Enumerate()).ToArray()
+                    tokens = pTargetAcct.AuthTokens.Enumerate(pagination).Select(tok =>
+                    {
+                        return new bodyTokenInfo(tok);
+                    }).ToArray()
                 };
             });
         }
@@ -147,7 +214,7 @@ namespace Project_Apollo.Hooks
         [APIPath("/api/v1/account/%/token/%", "DELETE", true)]
         public RESTReplyData account_delete_tokens(RESTRequestData pReq, List<string> pArgs)
         {
-            return APITargetedOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
+            return APITargetedAccountOperation(pReq, pArgs, (pRespBody, pSrcAcct, pTargetAcct) =>
             {
                 string tokenId = pArgs.Count > 1 ? pArgs[1] : null;
                 if (tokenId != null) {
@@ -175,7 +242,7 @@ namespace Project_Apollo.Hooks
         /// <param name="pArgs"></param>
         /// <param name="pDoOp"></param>
         /// <returns></returns>
-        public RESTReplyData APITargetedOperation(RESTRequestData pReq, List<string> pArgs, DoOperation pDoOp)
+        public RESTReplyData APITargetedAccountOperation(RESTRequestData pReq, List<string> pArgs, DoOperation pDoOp)
         {
             RESTReplyData replyData = new RESTReplyData();  // The HTTP response info
             ResponseBody respBody = new ResponseBody();
@@ -194,26 +261,26 @@ namespace Project_Apollo.Hooks
                         }
                         else
                         {
-                            respBody.RespondFailure();
+                            respBody.RespondFailure("Not account or administrator");
                             replyData.Status = (int)HttpStatusCode.Unauthorized;
                         };
                     }
                     else
                     {
-                        respBody.RespondFailure();
+                        respBody.RespondFailure("No such account");
                         replyData.Status = (int)HttpStatusCode.Unauthorized;
                     };
                 }
                 else
                 {
-                    respBody.RespondFailure();
+                    respBody.RespondFailure("Account not included in request URL");
                 }
             }
             else
             {
-                respBody.RespondFailure();
+                respBody.RespondFailure("Unauthorized");
             }
-            replyData.Body = respBody;
+            replyData.SetBody(respBody, pReq);
             return replyData;
         }
 

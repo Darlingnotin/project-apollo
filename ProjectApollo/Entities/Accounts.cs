@@ -1,4 +1,4 @@
-﻿//   Copyright 2020 Vircadia
+//   Copyright 2020 Vircadia
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -17,8 +17,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
 using BCrypt.Net;
+
 using Newtonsoft.Json;
+
 using Project_Apollo.Configuration;
 
 namespace Project_Apollo.Entities
@@ -73,6 +76,7 @@ namespace Project_Apollo.Entities
 
         /// <summary>
         /// Find and return a AccountEntity based on the AccountID.
+        /// THis is a shortcut operation since the accounts are indexed by Id.
         /// </summary>
         /// <param name="pAccountID"></param>
         /// <param name="oAccount">AccountEntity found</param>
@@ -90,31 +94,44 @@ namespace Project_Apollo.Entities
             }
         }
 
+        // Search the accounts and return the first one that the passed tester
+        //    thinks is 'true'.
+        public delegate bool TestAccount(AccountEntity pTester);
+        public AccountEntity GetAccountWithFilter(TestAccount pTester)
+        {
+            AccountEntity acct = null;
+            lock (_accountLock)
+            {
+                foreach (var kvp in ActiveAccounts)
+                {
+                    if (pTester(kvp.Value))
+                    {
+                        acct = kvp.Value;
+                        break;
+                    }
+                }
+            }
+            return acct;
+        }
         /// <summary>
         /// Find the account information based on the passed AuthToken.
         /// </summary>
         /// <param name="pAccountID"></param>
         /// <param name="oAccount">AccountEntity found</param>
         /// <returns></returns>
-        public bool TryGetAccountWithAuthToken(string pAuthToken, out AccountEntity oAccount)
+        public bool TryGetAccountWithAuthToken(string pAuthToken, out AccountEntity oAccount,
+                            AuthTokenInfo.ScopeCode pScope = AuthTokenInfo.ScopeCode.any)
         {
+            AccountEntity ret = null;
             if (pAuthToken != null)
             {
-                lock (_accountLock)
+                ret = GetAccountWithFilter( acct =>
                 {
-                    foreach (var kvp in ActiveAccounts)
-                    {
-                        // TODO: decide if we shoud only look for 'owner' auth tokens
-                        if (kvp.Value.TryGetAuthTokenInfo(pAuthToken, out _, AuthTokenInfo.ScopeCode.any))
-                        {
-                            oAccount = kvp.Value;
-                            return true;
-                        }
-                    }
-                }
+                    return acct.TryGetAuthTokenInfo(pAuthToken, out _, pScope);
+                });
             }
-            oAccount = null;
-            return false;
+            oAccount = ret;
+            return ret != null;
         }
         /// <summary>
         /// Find the account information based on the passed AuthToken.
@@ -124,23 +141,34 @@ namespace Project_Apollo.Entities
         /// <returns></returns>
         public bool TryGetAccountWithUsername(string pUsername, out AccountEntity oAccount)
         {
+            AccountEntity ret = null;
             if (pUsername != null)
             {
                 string lowerUsername = pUsername.ToLower();
-                lock (_accountLock)
+                ret = GetAccountWithFilter( acct =>
                 {
-                    foreach (var kvp in ActiveAccounts)
-                    {
-                        if (kvp.Value.Username.ToLower() == lowerUsername)
-                        {
-                            oAccount = kvp.Value;
-                            return true;
-                        }
-                    }
-                }
+                    return acct.Username.ToLower() == lowerUsername;
+                });
             }
-            oAccount = null;
-            return false;
+            oAccount = ret;
+            return ret != null;
+        }
+        /// <summary>
+        /// Return the account with the passed nodeId. This is an in-world
+        ///    handle to the avatar instance and it is passed in the avatar location.
+        /// </summary>
+        /// <param name="pNodeId"></param>
+        /// <param name="oAccount"></param>
+        /// <returns></returns>
+        public bool TryGetAccountWithNodeId(string pNodeId, out AccountEntity oAccount)
+        {
+            AccountEntity ret = GetAccountWithFilter( acct =>
+            {
+                return acct.Location != null
+                    && acct.Location.NodeID == pNodeId;
+            });
+            oAccount = ret;
+            return ret != null;
         }
 
         public void AddAccount(AccountEntity pAccountEntity)
@@ -194,12 +222,12 @@ namespace Project_Apollo.Entities
 
         // Return an IEnumerable of all the accounts.
         // This takes a snapshot of the current account list and returns those.
-        public IEnumerable<AccountEntity> AllAccountEntities()
+        public IEnumerable<AccountEntity> Enumerate(PaginationInfo pPager, AccountFilterInfo pAcctr, AccountScopeFilter pScoper)
         {
             List<AccountEntity> aEntities;
             lock (_accountLock)
             {
-                aEntities = new List<AccountEntity>(ActiveAccounts.Values);
+                aEntities = new List<AccountEntity>(pPager.Filter<AccountEntity>(pAcctr.Filter(pScoper.Filter(ActiveAccounts.Values))));
             }
             return aEntities.AsEnumerable();
         }
@@ -349,6 +377,67 @@ namespace Project_Apollo.Entities
             }
             return ret;
         }
+        public string GetAccountType()
+        {
+            return this.Administrator ? "admin" : "user";
+        }
+        // Add a friend to the friend list.
+        // Since a friend must also be a connection, we add the connection.
+        // The caller is expected to have verified that it is legal to add this
+        //     friend (i.e., if the 'friend' needed to be a 'connection' first).
+        public bool AddFriend(AccountEntity pOtherAccount)
+        {
+            bool ret = false;
+            lock (Friends)
+            {
+                if (!Friends.Contains(pOtherAccount.Username))
+                {
+                    AddConnection(pOtherAccount);
+                    Friends.Add(pOtherAccount.Username);
+                    ret = true;
+                }
+            }
+            return ret;
+        }
+        public bool DeleteFriend(AccountEntity pOtherAccount)
+        {
+            bool ret = false;
+            lock (Friends)
+            {
+                if (!Friends.Contains(pOtherAccount.Username))
+                {
+                    Friends.Remove(pOtherAccount.Username);
+                    ret = true;
+                }
+            }
+            return ret;
+        }
+        public bool AddConnection(AccountEntity pOtherAccount)
+        {
+            bool ret = false;
+            lock (Connections)
+            {
+                if (!Connections.Contains(pOtherAccount.Username))
+                {
+                    Connections.Add(pOtherAccount.Username);
+                    ret = true;
+                }
+            }
+            return ret;
+        }
+        public bool DeleteConnection(AccountEntity pOtherAccount)
+        {
+            bool ret = false;
+            lock (Connections)
+            {
+                if (!Connections.Contains(pOtherAccount.Username))
+                {
+                    Connections.Remove(pOtherAccount.Username);
+                    ret = true;
+                }
+            }
+            return ret;
+        }
         // Get the authorization information for a particular token.
         // Returns 'null' if there is no such authorization.
         public bool TryGetAuthTokenInfo(string pToken, out AuthTokenInfo oAuthToken,
@@ -445,12 +534,13 @@ namespace Project_Apollo.Entities
                 this.Remove(pToRemove);
             }
         }
-        public IEnumerable<T> Enumerate()
+        public IEnumerable<T> Enumerate(PaginationInfo pPager = null)
         {
+            PaginationInfo pager = pPager ?? new PaginationInfo();
             List<T> copyOf;
             lock (this)
             {
-                copyOf = new List<T>(this);
+                copyOf = new List<T>(pager.Filter<T>(this));
             }
             return copyOf.AsEnumerable<T>();
         }

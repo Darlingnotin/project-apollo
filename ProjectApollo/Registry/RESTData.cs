@@ -23,6 +23,7 @@ using Newtonsoft.Json.Linq;
 using HttpMultipartParser;
 using System.Linq;
 using System.Text.Encodings.Web;
+using Project_Apollo.Hooks;
 
 namespace Project_Apollo.Registry
 {
@@ -234,7 +235,7 @@ namespace Project_Apollo.Registry
                         {
                             if (tokenPieces[0].ToLower() == "bearer")
                             {
-                                _authToken = String.Join(" ", tokenPieces[1..]);
+                                _authToken = String.Join(" ", tokenPieces[1..]).Trim();
                             }
                             else
                             {
@@ -273,11 +274,9 @@ namespace Project_Apollo.Registry
     public class RESTReplyData
     {
         // String body to serialize into the response
-        public string Body;
+        private string Body;
         // HTTP reply status code (200, etc)
         public int Status;
-        // If defined, added to the status response code 
-        public string CustomStatus; // <-- Examples: OK, Not Found, Authorization Required, etc.
         // Header fields to add to the response
         public Dictionary<string, string> CustomOutputHeaders;
         // If there are contents, the MIME type
@@ -285,15 +284,59 @@ namespace Project_Apollo.Registry
         public RESTReplyData()
         {
             Status = (int)HttpStatusCode.OK;   // Assume successful response
-            MIMEType = "text/json";
+            MIMEType = "application/json";
             CustomOutputHeaders = new Dictionary<string, string>();
         }
-        public RESTReplyData(string pBody)
+        public RESTReplyData(string pBody) : this()
         {
-            Status = (int)HttpStatusCode.OK;   // Assume successful response
-            MIMEType = "text/json";
-            CustomOutputHeaders = new Dictionary<string, string>();
             Body = pBody;
+        }
+
+        public static string ERROR_HEADER = "x-vircadia-error-handle";
+        /// <summary>
+        /// Set the body of the response from the 'ResponseBody'
+        /// If a request header is passed, an extra check is made to see if
+        /// the special error return header is present.
+        /// 
+        /// If the header is present and has the correct value and the
+        /// request has had a failure, change the HTTP request response
+        /// to "Bad Request". Normal operation is to return "OK" and let
+        /// the caller check for the error but this makes it easier for
+        /// some scripts to get an HTTP error when there is a problem.
+        /// </summary>
+        /// <param name="pRespBody"></param>
+        /// <param name="pReq"></param>
+        public void SetBody(ResponseBody pRespBody, RESTRequestData pReq = null)
+        {
+            this.Body = pRespBody.ToString();
+            if (pReq != null && pRespBody.Failure)
+            {
+                if (pReq.Headers.ContainsKey(ERROR_HEADER))
+                {
+                    if (pReq.Headers[ERROR_HEADER].ToLower() == "badrequest")
+                    {
+                        if (this.Status == (int)HttpStatusCode.OK)
+                        {
+                            this.Status = (int)HttpStatusCode.BadRequest;
+                        }
+                    }
+                }
+            }
+        }
+
+        public void SetBody(string pBody)
+        {
+            this.Body = pBody;
+        }
+        public bool hasBody
+        {
+            get {
+                return !String.IsNullOrEmpty(this.Body);
+            }
+        }
+        public string GetBody()
+        {
+            return this.Body;
         }
     }
 

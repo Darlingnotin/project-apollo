@@ -62,6 +62,7 @@ namespace Project_Apollo.Configuration
         public static readonly string P_LISTENER_HOST = "Listener.Host";
         public static readonly string P_LISTENER_PORT = "Listener.Port";
         public static readonly string P_LISTENER_RESPONSE_HEADER_SERVER = "Listener.Response.Header.Server";
+        public static readonly string P_LISTENER_CORS_PROCESSING = "Listener.CORS.Processing";
 
         public static readonly string P_STORAGE_DIR = "Storage.Dir";
         public static readonly string P_ENTITY_DIR = "Storage.Entity.Dir";
@@ -69,6 +70,8 @@ namespace Project_Apollo.Configuration
 
         public static readonly string P_ACCOUNT_AUTHTOKEN_LIFETIME_HOURS = "Account.AuthToken.Lifetime";
         public static readonly string P_ACCOUNT_AUTHTOKENEXPIRATIONCHECKSECONDS = "Account.AuthTokenExpirationCheckSeconds";
+        public static readonly string P_ACCOUNT_USERNAME_FORMAT = "Account.Username.Format";
+        public static readonly string P_ACCOUNT_EMAIL_FORMAT = "Account.Email.Format";
 
         public static readonly string P_DOMAIN_TOKENGEN_URL = "Domain.TokenGenURL";
 
@@ -76,6 +79,9 @@ namespace Project_Apollo.Configuration
         public static readonly string P_SESSION_IDLE_CHECK_SECONDS = "Session.SessionIdleCheckSeconds";
         public static readonly string P_SESSION_THROTTLE_ACCOUNT_CREATE = "Session.Throttle.AccountCreate";
         public static readonly string P_SESSION_THROTTLE_TOKEN_CREATE = "Session.Throttle.TokenCreate";
+
+        public static readonly string P_REQUEST_EXPIRATION_CHECK_SECONDS = "Request.ExpirationCheckSeconds";
+        public static readonly string P_CONNECTION_REQUEST_SECONDS = "Request.ConnectionRequestExpirationSeconds";
 
         public static readonly string P_COMMERCE_MARKETPLACEKEY = "Commerce.MarketplaceKey";
 
@@ -136,6 +142,7 @@ namespace Project_Apollo.Configuration
             ret.Add(new ParamBlock.ParameterDefn<string>(P_LISTENER_HOST, "HttpListener host", "+"));
             ret.Add(new ParamBlock.ParameterDefn<int>(P_LISTENER_PORT, "HttpListener port", 9400));
             ret.Add(new ParamBlock.ParameterDefn<string>(P_LISTENER_RESPONSE_HEADER_SERVER, "What to return as 'Server: header field", "1.5"));
+            ret.Add(new ParamBlock.ParameterDefn<string>(P_LISTENER_CORS_PROCESSING, "CORS response header. One of 'NONE', 'ORIGIN', 'STAR'", "STAR"));
 
             ret.Add(new ParamBlock.ParameterDefn<string>(P_STORAGE_DIR, "Root of storage", "."));
             ret.Add(new ParamBlock.ParameterDefn<string>(P_ENTITY_DIR, "Root of entity storage", "Entities"));
@@ -143,6 +150,8 @@ namespace Project_Apollo.Configuration
 
             ret.Add(new ParamBlock.ParameterDefn<int>(P_ACCOUNT_AUTHTOKEN_LIFETIME_HOURS, "Hours that an AuthToken is allowed to live", 12));
             ret.Add(new ParamBlock.ParameterDefn<int>(P_ACCOUNT_AUTHTOKENEXPIRATIONCHECKSECONDS, "Seconds between times checking for authtoken flushing", 60));
+            ret.Add(new ParamBlock.ParameterDefn<string>(P_ACCOUNT_USERNAME_FORMAT, "Regex for username format", @"^[0-9a-z_+-\.]+$"));
+            ret.Add(new ParamBlock.ParameterDefn<string>(P_ACCOUNT_EMAIL_FORMAT, "Regex for email format", @"^[0-9a-z_+-\.]+@[0-9a-z-\.]+$"));
 
             ret.Add(new ParamBlock.ParameterDefn<string>(P_DOMAIN_TOKENGEN_URL, "URL for user domain token generation", "/static/DomainTokenLogin.html"));
 
@@ -150,6 +159,9 @@ namespace Project_Apollo.Configuration
             ret.Add(new ParamBlock.ParameterDefn<int>(P_SESSION_IDLE_CHECK_SECONDS, "How often to check for idle sessions", 60 * 2));
             ret.Add(new ParamBlock.ParameterDefn<int>(P_SESSION_THROTTLE_ACCOUNT_CREATE, "Account creatable per heartbeat", 2));
             ret.Add(new ParamBlock.ParameterDefn<int>(P_SESSION_THROTTLE_TOKEN_CREATE, "Access tokens creatable per heartbeat", 2));
+
+            ret.Add(new ParamBlock.ParameterDefn<int>(P_REQUEST_EXPIRATION_CHECK_SECONDS, "How often to check for request expiration", 60));
+            ret.Add(new ParamBlock.ParameterDefn<int>(P_CONNECTION_REQUEST_SECONDS, "Seconds that a connection_request stays active", 20));
 
             ret.Add(new ParamBlock.ParameterDefn<string>(P_COMMERCE_MARKETPLACEKEY, "Public key for Marketplace access", "lksjdlkjskldjflsd"));
 
